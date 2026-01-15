@@ -111,6 +111,13 @@ def get_ready_count():
     return jsonify({'count': count})
 
 
+@items_bp.route('/stats', methods=['GET'])
+def get_stats():
+    """Get item statistics for dashboard."""
+    stats = Item.get_stats()
+    return jsonify(stats)
+
+
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""

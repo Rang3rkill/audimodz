@@ -9,8 +9,87 @@
 <body>
     <header class="header">
         <h1 class="header-title">Judi's Wishlist</h1>
-        <button id="refreshPrices" class="btn btn-secondary">Refresh Prices</button>
+        <div class="header-actions">
+            <button id="caretakerToggle" class="btn btn-secondary btn-small">
+                <span class="caretaker-icon">&#9881;</span> Caretaker
+            </button>
+        </div>
     </header>
+
+    <!-- Caretaker Panel (slides in from right) -->
+    <aside id="caretakerPanel" class="caretaker-panel hidden">
+        <div class="caretaker-header">
+            <h2>Caretaker Tools</h2>
+            <button id="closeCaretaker" class="close-btn">&times;</button>
+        </div>
+        <div class="caretaker-content">
+            <!-- Dashboard Stats -->
+            <div class="dashboard-section">
+                <h3>Dashboard</h3>
+                <div class="stats-grid" id="statsGrid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalItems">0</div>
+                        <div class="stat-label">Total Items</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalValue">$0</div>
+                        <div class="stat-label">Total Value</div>
+                    </div>
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="statReadyToBuy">0</div>
+                        <div class="stat-label">Ready to Buy</div>
+                    </div>
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="statReadyValue">$0</div>
+                        <div class="stat-label">Cart Value</div>
+                    </div>
+                </div>
+                <div class="store-stats" id="storeStats"></div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="caretaker-section">
+                <h3>Quick Actions</h3>
+                <div class="action-buttons">
+                    <button id="refreshPrices" class="btn btn-secondary btn-block">
+                        <span>&#8635;</span> Refresh All Prices
+                    </button>
+                    <button id="manageCategoriesBtn2" class="btn btn-secondary btn-block">
+                        <span>&#9776;</span> Manage Categories
+                    </button>
+                    <button id="manageListsBtn2" class="btn btn-secondary btn-block">
+                        <span>&#9776;</span> Manage Lists
+                    </button>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="caretaker-section">
+                <h3>Activity</h3>
+                <div class="activity-info">
+                    <div class="activity-row">
+                        <span>New this week:</span>
+                        <span id="statRecentlyAdded">0 items</span>
+                    </div>
+                    <div class="activity-row">
+                        <span>Favorites:</span>
+                        <span id="statFavorites">0 items</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tips -->
+            <div class="caretaker-section tips-section">
+                <h3>Tips for Judi</h3>
+                <ul class="tips-list">
+                    <li>Tap the <strong>heart</strong> to mark favorites</li>
+                    <li>Tap the <strong>checkbox</strong> to add to cart</li>
+                    <li><strong>Drag items</strong> to reorder them</li>
+                    <li>Use <strong>category tabs</strong> to filter</li>
+                </ul>
+            </div>
+        </div>
+    </aside>
 
     <main class="main-content">
         {% block content %}{% endblock %}

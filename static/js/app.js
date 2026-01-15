@@ -5,6 +5,7 @@ const App = {
     categories: [],
     lists: [],
     items: [],
+    stats: {},
     currentCategory: null,
     currentList: null,
     showingReadyToBuy: false,
@@ -61,7 +62,23 @@ const App = {
             editItemCategory: document.getElementById('editItemCategory'),
             editItemList: document.getElementById('editItemList'),
             editItemQuantity: document.getElementById('editItemQuantity'),
+            editItemNotes: document.getElementById('editItemNotes'),
             deleteItemBtn: document.getElementById('deleteItemBtn'),
+            // Caretaker panel
+            caretakerToggle: document.getElementById('caretakerToggle'),
+            caretakerPanel: document.getElementById('caretakerPanel'),
+            closeCaretaker: document.getElementById('closeCaretaker'),
+            // Stats elements
+            statTotalItems: document.getElementById('statTotalItems'),
+            statTotalValue: document.getElementById('statTotalValue'),
+            statReadyToBuy: document.getElementById('statReadyToBuy'),
+            statReadyValue: document.getElementById('statReadyValue'),
+            statRecentlyAdded: document.getElementById('statRecentlyAdded'),
+            statFavorites: document.getElementById('statFavorites'),
+            storeStats: document.getElementById('storeStats'),
+            // Caretaker action buttons
+            manageCategoriesBtn2: document.getElementById('manageCategoriesBtn2'),
+            manageListsBtn2: document.getElementById('manageListsBtn2'),
         };
     },
 
@@ -99,7 +116,7 @@ const App = {
         });
 
         // Refresh prices
-        this.elements.refreshPrices.addEventListener('click', () => {
+        this.elements.refreshPrices?.addEventListener('click', () => {
             alert('Price refresh will be available once the Chrome extension is installed.');
         });
 
@@ -110,6 +127,24 @@ const App = {
 
         this.elements.manageListsBtn?.addEventListener('click', () => {
             this.showManageListsModal();
+        });
+
+        // Caretaker panel buttons (duplicates in panel)
+        this.elements.manageCategoriesBtn2?.addEventListener('click', () => {
+            this.showManageCategoriesModal();
+        });
+
+        this.elements.manageListsBtn2?.addEventListener('click', () => {
+            this.showManageListsModal();
+        });
+
+        // Caretaker panel toggle
+        this.elements.caretakerToggle?.addEventListener('click', () => {
+            this.toggleCaretakerPanel();
+        });
+
+        this.elements.closeCaretaker?.addEventListener('click', () => {
+            this.hideCaretakerPanel();
         });
 
         // Close buttons for all modals
@@ -176,12 +211,14 @@ const App = {
 
     // Load all data
     async loadData() {
-        const [categories, lists] = await Promise.all([
+        const [categories, lists, stats] = await Promise.all([
             this.api('/api/categories'),
             this.api('/api/lists'),
+            this.api('/api/items/stats'),
         ]);
         this.categories = categories;
         this.lists = lists;
+        this.stats = stats;
         await this.loadItems();
     },
 
@@ -209,12 +246,79 @@ const App = {
         return data.count;
     },
 
+    // Load stats
+    async loadStats() {
+        this.stats = await this.api('/api/items/stats');
+        this.renderStats();
+    },
+
     // Render methods
     async render() {
         await this.renderCategoryTabs();
         this.renderListDropdown();
         this.renderFormSelects();
         this.renderItems();
+        this.renderStats();
+    },
+
+    // Render stats in caretaker panel
+    renderStats() {
+        if (!this.stats) return;
+
+        // Update stat values
+        if (this.elements.statTotalItems) {
+            this.elements.statTotalItems.textContent = this.stats.total_items || 0;
+        }
+        if (this.elements.statTotalValue) {
+            this.elements.statTotalValue.textContent = '$' + (this.stats.total_value || 0).toFixed(2);
+        }
+        if (this.elements.statReadyToBuy) {
+            this.elements.statReadyToBuy.textContent = this.stats.ready_to_buy || 0;
+        }
+        if (this.elements.statReadyValue) {
+            this.elements.statReadyValue.textContent = '$' + (this.stats.ready_to_buy_value || 0).toFixed(2);
+        }
+        if (this.elements.statRecentlyAdded) {
+            this.elements.statRecentlyAdded.textContent = (this.stats.recently_added || 0) + ' items';
+        }
+        if (this.elements.statFavorites) {
+            this.elements.statFavorites.textContent = (this.stats.favorites || 0) + ' items';
+        }
+
+        // Render store stats
+        if (this.elements.storeStats && this.stats.by_store) {
+            const storeConfig = {
+                temu: { name: 'Temu', icon: 'T' },
+                amazon: { name: 'Amazon', icon: 'A' },
+            };
+
+            let html = '';
+            for (const [store, data] of Object.entries(this.stats.by_store)) {
+                const config = storeConfig[store] || { name: store, icon: store[0].toUpperCase() };
+                html += `
+                    <div class="store-stat-row">
+                        <span class="store-stat-icon ${store}">${config.icon}</span>
+                        <div class="store-stat-info">
+                            <div class="store-stat-name">${config.name}</div>
+                            <div class="store-stat-details">${data.count} items - $${data.value.toFixed(2)}</div>
+                        </div>
+                    </div>
+                `;
+            }
+            this.elements.storeStats.innerHTML = html;
+        }
+    },
+
+    // Caretaker panel
+    toggleCaretakerPanel() {
+        this.elements.caretakerPanel?.classList.toggle('hidden');
+        if (!this.elements.caretakerPanel?.classList.contains('hidden')) {
+            this.loadStats();
+        }
+    },
+
+    hideCaretakerPanel() {
+        this.elements.caretakerPanel?.classList.add('hidden');
     },
 
     // Render category tabs
@@ -303,8 +407,9 @@ const App = {
         if (this.items.length === 0) {
             this.elements.itemsGrid.innerHTML = `
                 <div class="empty-state">
-                    <h3>No items yet</h3>
-                    <p>Click the + button to add items, or use the Chrome extension to import from Temu or Amazon.</p>
+                    <div class="empty-state-icon">&#128722;</div>
+                    <h3>No items here yet!</h3>
+                    <p>Use the Chrome extension to import items from Temu or Amazon, or tap the + button to add manually.</p>
                 </div>
             `;
             return;
@@ -338,38 +443,75 @@ const App = {
             indicators += `<span class="indicator warning">Qty: ${item.quantity}</span>`;
         }
 
+        // Price change indicator
+        let priceChangeHtml = '';
+        if (item.current_price !== null && item.original_price !== null && item.original_price > 0) {
+            const priceDiff = item.current_price - item.original_price;
+            const percentChange = ((priceDiff / item.original_price) * 100).toFixed(0);
+
+            if (priceDiff < -0.01) {
+                // Price dropped
+                const savings = Math.abs(priceDiff).toFixed(2);
+                priceChangeHtml = `<span class="price-change price-down" title="Was $${item.original_price.toFixed(2)}">-$${savings} (${Math.abs(percentChange)}% off)</span>`;
+            } else if (priceDiff > 0.01) {
+                // Price increased
+                priceChangeHtml = `<span class="price-change price-up" title="Was $${item.original_price.toFixed(2)}">+${percentChange}%</span>`;
+            }
+        }
+
         const price = item.current_price !== null
             ? `${item.currency || '$'}${item.current_price.toFixed(2)}`
             : 'No price';
 
         const checked = item.in_ready_to_buy ? 'checked' : '';
+        const favoriteActive = item.is_favorite ? 'active' : '';
+        const favoriteIcon = item.is_favorite ? '&#10084;' : '&#9825;';
+
+        // Notes indicator
+        const notesHtml = item.notes
+            ? `<span class="notes-indicator" title="${this.escapeHtml(item.notes)}">&#128221; ${this.escapeHtml(item.notes)}</span>`
+            : '';
 
         return `
             <div class="item-card" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
                     ${imageHtml}
+                    <button class="favorite-btn ${favoriteActive}" data-id="${item.id}" title="Favorite">${favoriteIcon}</button>
                     <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}
+                    ${notesHtml}
                 </div>
                 <div class="item-details">
                     <h3 class="item-title" title="${this.escapeHtml(item.title)}">${this.escapeHtml(item.title)}</h3>
                     <div class="item-price-row">
-                        <span class="item-price">${price}</span>
-                        <input type="checkbox" class="item-checkbox" data-id="${item.id}" ${checked}>
+                        <div class="price-container">
+                            <span class="item-price">${price}</span>
+                            ${priceChangeHtml}
+                        </div>
+                        <input type="checkbox" class="item-checkbox" data-id="${item.id}" ${checked} title="Add to cart">
                     </div>
                 </div>
             </div>
         `;
     },
 
-    // Bind item events (checkboxes, drag and drop, edit)
+    // Bind item events (checkboxes, drag and drop, edit, favorites)
     bindItemEvents() {
         // Checkboxes
         this.elements.itemsGrid.querySelectorAll('.item-checkbox').forEach(checkbox => {
             checkbox.addEventListener('change', (e) => {
                 const itemId = parseInt(e.target.dataset.id);
                 this.toggleReadyToBuy(itemId, e.target.checked);
+            });
+        });
+
+        // Favorite buttons
+        this.elements.itemsGrid.querySelectorAll('.favorite-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemId = parseInt(btn.dataset.id);
+                this.toggleFavorite(itemId, btn);
             });
         });
 
@@ -391,6 +533,27 @@ const App = {
             card.addEventListener('dragleave', (e) => this.handleDragLeave(e, card));
             card.addEventListener('drop', (e) => this.handleDrop(e, card));
         });
+    },
+
+    // Toggle favorite
+    async toggleFavorite(itemId, btn) {
+        const item = this.items.find(i => i.id === itemId);
+        if (!item) return;
+
+        const newValue = !item.is_favorite;
+
+        // Optimistic UI update
+        btn.classList.toggle('active', newValue);
+        btn.innerHTML = newValue ? '&#10084;' : '&#9825;';
+
+        await this.api(`/api/items/${itemId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ is_favorite: newValue ? 1 : 0 }),
+        });
+
+        // Update local state
+        item.is_favorite = newValue;
+        await this.loadStats();
     },
 
     // Drag and drop handlers
@@ -428,9 +591,6 @@ const App = {
         card.classList.remove('drag-over');
 
         if (!this.draggedItem || card === this.draggedItem) return;
-
-        const draggedId = parseInt(this.draggedItem.dataset.id);
-        const targetId = parseInt(card.dataset.id);
 
         // Find positions
         const cards = Array.from(this.elements.itemsGrid.querySelectorAll('.item-card'));
@@ -473,8 +633,9 @@ const App = {
             body: JSON.stringify({ in_ready_to_buy: inReadyToBuy ? 1 : 0 }),
         });
 
-        // Update ready count in tab
+        // Update ready count in tab and stats
         await this.renderCategoryTabs();
+        await this.loadStats();
     },
 
     // Load ready to buy view
@@ -494,8 +655,9 @@ const App = {
         if (storeNames.length === 0) {
             this.elements.readyToBuyContent.innerHTML = `
                 <div class="empty-state">
-                    <h3>No items ready to buy</h3>
-                    <p>Check the boxes on items you want to purchase.</p>
+                    <div class="empty-state-icon">&#128722;</div>
+                    <h3>Your cart is empty!</h3>
+                    <p>Tap the checkbox on items you want to buy. They'll appear here ready for checkout.</p>
                 </div>
             `;
             return;
@@ -533,6 +695,19 @@ const App = {
                 const qty = item.quantity || 1;
                 const total = (price * qty).toFixed(2);
 
+                // Price change indicator for ready-to-buy list
+                let priceIndicator = '';
+                if (item.original_price !== null && item.original_price > 0) {
+                    const priceDiff = price - item.original_price;
+                    if (priceDiff < -0.01) {
+                        const savings = Math.abs(priceDiff).toFixed(2);
+                        priceIndicator = `<span class="price-change price-down">Save $${savings}</span>`;
+                    } else if (priceDiff > 0.01) {
+                        const increase = priceDiff.toFixed(2);
+                        priceIndicator = `<span class="price-change price-up">+$${increase}</span>`;
+                    }
+                }
+
                 html += `
                     <div class="ready-item">
                         <input type="checkbox" class="item-checkbox" data-id="${item.id}" checked>
@@ -542,6 +717,7 @@ const App = {
                             <div class="ready-item-price">
                                 <span>$${price.toFixed(2)} x ${qty}</span>
                                 <span>= $${total}</span>
+                                ${priceIndicator}
                             </div>
                         </div>
                     </div>
@@ -640,6 +816,7 @@ const App = {
             this.hideAddModal();
             await this.loadItems();
             await this.renderCategoryTabs();
+            await this.loadStats();
         } catch (error) {
             alert('Error adding item: ' + error.message);
         }
@@ -961,6 +1138,9 @@ const App = {
         this.elements.editItemCategory.value = item.category_id;
         this.elements.editItemList.value = item.list_id;
         this.elements.editItemQuantity.value = item.quantity || 1;
+        if (this.elements.editItemNotes) {
+            this.elements.editItemNotes.value = item.notes || '';
+        }
 
         this.elements.editItemModal.classList.remove('hidden');
     },
@@ -972,6 +1152,10 @@ const App = {
             list_id: parseInt(this.elements.editItemList.value),
             quantity: parseInt(this.elements.editItemQuantity.value) || 1,
         };
+
+        if (this.elements.editItemNotes) {
+            updates.notes = this.elements.editItemNotes.value || null;
+        }
 
         try {
             await this.api(`/api/items/${itemId}`, {
@@ -998,6 +1182,7 @@ const App = {
             this.elements.editItemModal.classList.add('hidden');
             await this.loadItems();
             await this.renderCategoryTabs();
+            await this.loadStats();
         } catch (error) {
             alert('Error deleting item');
         }

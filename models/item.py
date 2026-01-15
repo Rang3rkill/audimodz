@@ -136,7 +136,8 @@ class Item:
         allowed_fields = {
             'title', 'image_url', 'current_price', 'quantity',
             'category_id', 'list_id', 'position', 'in_ready_to_buy',
-            'is_unavailable', 'last_price', 'price_updated_at'
+            'is_unavailable', 'last_price', 'price_updated_at',
+            'notes', 'is_favorite'
         }
 
         updates = []
@@ -237,3 +238,57 @@ class Item:
         count = cursor.fetchone()[0]
         conn.close()
         return count
+
+    @staticmethod
+    def get_stats():
+        """Get statistics about items for dashboard."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        stats = {}
+
+        # Total items
+        cursor.execute('SELECT COUNT(*) FROM items')
+        stats['total_items'] = cursor.fetchone()[0]
+
+        # Total value
+        cursor.execute('''
+            SELECT COALESCE(SUM(current_price * quantity), 0) FROM items
+        ''')
+        stats['total_value'] = cursor.fetchone()[0]
+
+        # By store
+        cursor.execute('''
+            SELECT store, COUNT(*) as count,
+                   COALESCE(SUM(current_price * quantity), 0) as value
+            FROM items GROUP BY store
+        ''')
+        stats['by_store'] = {
+            row['store']: {'count': row['count'], 'value': row['value']}
+            for row in cursor.fetchall()
+        }
+
+        # Favorites count
+        cursor.execute('SELECT COUNT(*) FROM items WHERE is_favorite = 1')
+        stats['favorites'] = cursor.fetchone()[0]
+
+        # Ready to buy
+        cursor.execute('SELECT COUNT(*) FROM items WHERE in_ready_to_buy = 1')
+        stats['ready_to_buy'] = cursor.fetchone()[0]
+
+        # Ready to buy value
+        cursor.execute('''
+            SELECT COALESCE(SUM(current_price * quantity), 0)
+            FROM items WHERE in_ready_to_buy = 1
+        ''')
+        stats['ready_to_buy_value'] = cursor.fetchone()[0]
+
+        # Recently added (last 7 days)
+        cursor.execute('''
+            SELECT COUNT(*) FROM items
+            WHERE date_added >= datetime('now', '-7 days')
+        ''')
+        stats['recently_added'] = cursor.fetchone()[0]
+
+        conn.close()
+        return stats

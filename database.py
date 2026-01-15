@@ -84,6 +84,18 @@ def init_db():
         )
     ''')
 
+    # Add notes column if it doesn't exist (migration)
+    try:
+        cursor.execute('ALTER TABLE items ADD COLUMN notes TEXT')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add is_favorite column if it doesn't exist (migration)
+    try:
+        cursor.execute('ALTER TABLE items ADD COLUMN is_favorite BOOLEAN DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Create indexes
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_items_category ON items(category_id)
