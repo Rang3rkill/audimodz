@@ -43,6 +43,25 @@ const App = {
             itemQuantity: document.getElementById('itemQuantity'),
             itemCategory: document.getElementById('itemCategory'),
             itemList: document.getElementById('itemList'),
+            // Management modals
+            manageCategoriesBtn: document.getElementById('manageCategoriesBtn'),
+            manageListsBtn: document.getElementById('manageListsBtn'),
+            manageCategoriesModal: document.getElementById('manageCategoriesModal'),
+            manageListsModal: document.getElementById('manageListsModal'),
+            categoriesList: document.getElementById('categoriesList'),
+            listsList: document.getElementById('listsList'),
+            newCategoryName: document.getElementById('newCategoryName'),
+            newListName: document.getElementById('newListName'),
+            addCategoryBtn: document.getElementById('addCategoryBtn'),
+            addListBtn: document.getElementById('addListBtn'),
+            // Edit item modal
+            editItemModal: document.getElementById('editItemModal'),
+            editItemForm: document.getElementById('editItemForm'),
+            editItemId: document.getElementById('editItemId'),
+            editItemCategory: document.getElementById('editItemCategory'),
+            editItemList: document.getElementById('editItemList'),
+            editItemQuantity: document.getElementById('editItemQuantity'),
+            deleteItemBtn: document.getElementById('deleteItemBtn'),
         };
     },
 
@@ -82,6 +101,65 @@ const App = {
         // Refresh prices
         this.elements.refreshPrices.addEventListener('click', () => {
             alert('Price refresh will be available once the Chrome extension is installed.');
+        });
+
+        // Management modals
+        this.elements.manageCategoriesBtn?.addEventListener('click', () => {
+            this.showManageCategoriesModal();
+        });
+
+        this.elements.manageListsBtn?.addEventListener('click', () => {
+            this.showManageListsModal();
+        });
+
+        // Close buttons for all modals
+        document.querySelectorAll('[data-close]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const modalId = btn.dataset.close;
+                document.getElementById(modalId)?.classList.add('hidden');
+            });
+        });
+
+        // Modal backdrop clicks
+        [this.elements.manageCategoriesModal, this.elements.manageListsModal, this.elements.editItemModal].forEach(modal => {
+            modal?.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    modal.classList.add('hidden');
+                }
+            });
+        });
+
+        // Add category
+        this.elements.addCategoryBtn?.addEventListener('click', () => {
+            this.addCategory();
+        });
+
+        this.elements.newCategoryName?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.addCategory();
+            }
+        });
+
+        // Add list
+        this.elements.addListBtn?.addEventListener('click', () => {
+            this.addList();
+        });
+
+        this.elements.newListName?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.addList();
+            }
+        });
+
+        // Edit item form
+        this.elements.editItemForm?.addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.saveItemEdit();
+        });
+
+        // Delete item
+        this.elements.deleteItemBtn?.addEventListener('click', () => {
+            this.deleteItem();
         });
     },
 
@@ -186,26 +264,35 @@ const App = {
     renderListDropdown() {
         let html = '<option value="">All Lists</option>';
         for (const list of this.lists) {
-            html += `<option value="${list.id}">${list.name}</option>`;
+            const selected = this.currentList === list.id ? 'selected' : '';
+            html += `<option value="${list.id}" ${selected}>${list.name}</option>`;
         }
         this.elements.listSelect.innerHTML = html;
     },
 
     // Render form selects
     renderFormSelects() {
-        // Categories
+        // Categories for add item
         let catHtml = '';
         for (const cat of this.categories) {
             catHtml += `<option value="${cat.id}">${cat.name}</option>`;
         }
         this.elements.itemCategory.innerHTML = catHtml;
 
-        // Lists
+        // Lists for add item
         let listHtml = '';
         for (const list of this.lists) {
             listHtml += `<option value="${list.id}">${list.name}</option>`;
         }
         this.elements.itemList.innerHTML = listHtml;
+
+        // Edit item selects
+        if (this.elements.editItemCategory) {
+            this.elements.editItemCategory.innerHTML = catHtml;
+        }
+        if (this.elements.editItemList) {
+            this.elements.editItemList.innerHTML = listHtml;
+        }
     },
 
     // Render items grid
@@ -261,6 +348,7 @@ const App = {
             <div class="item-card" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
                     ${imageHtml}
+                    <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}
                 </div>
@@ -275,13 +363,22 @@ const App = {
         `;
     },
 
-    // Bind item events (checkboxes, drag and drop)
+    // Bind item events (checkboxes, drag and drop, edit)
     bindItemEvents() {
         // Checkboxes
         this.elements.itemsGrid.querySelectorAll('.item-checkbox').forEach(checkbox => {
             checkbox.addEventListener('change', (e) => {
                 const itemId = parseInt(e.target.dataset.id);
                 this.toggleReadyToBuy(itemId, e.target.checked);
+            });
+        });
+
+        // Edit buttons
+        this.elements.itemsGrid.querySelectorAll('.edit-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemId = parseInt(btn.dataset.id);
+                this.showEditItemModal(itemId);
             });
         });
 
@@ -545,6 +642,364 @@ const App = {
             await this.renderCategoryTabs();
         } catch (error) {
             alert('Error adding item: ' + error.message);
+        }
+    },
+
+    // Category Management
+    showManageCategoriesModal() {
+        this.elements.manageCategoriesModal.classList.remove('hidden');
+        this.renderCategoriesList();
+    },
+
+    renderCategoriesList() {
+        let html = '';
+        for (const cat of this.categories) {
+            const isDefault = cat.is_default ? 'is-default' : '';
+            const deleteDisabled = cat.is_default ? 'disabled' : '';
+
+            html += `
+                <div class="sortable-item ${isDefault}" data-id="${cat.id}" draggable="true">
+                    <span class="drag-handle">&#9776;</span>
+                    <span class="item-name">${this.escapeHtml(cat.name)}</span>
+                    <div class="item-actions">
+                        <button class="btn-icon-small rename-btn" data-id="${cat.id}" title="Rename">&#9998;</button>
+                        <button class="btn-icon-small delete ${deleteDisabled}" data-id="${cat.id}" title="Delete" ${deleteDisabled}>&#10005;</button>
+                    </div>
+                </div>
+            `;
+        }
+        this.elements.categoriesList.innerHTML = html;
+        this.bindCategoryListEvents();
+    },
+
+    bindCategoryListEvents() {
+        // Rename buttons
+        this.elements.categoriesList.querySelectorAll('.rename-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = parseInt(btn.dataset.id);
+                this.renameCategory(id);
+            });
+        });
+
+        // Delete buttons
+        this.elements.categoriesList.querySelectorAll('.delete:not([disabled])').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = parseInt(btn.dataset.id);
+                this.deleteCategory(id);
+            });
+        });
+
+        // Drag and drop for reordering
+        const items = this.elements.categoriesList.querySelectorAll('.sortable-item');
+        items.forEach(item => {
+            item.addEventListener('dragstart', (e) => {
+                item.classList.add('dragging');
+                e.dataTransfer.setData('text/plain', item.dataset.id);
+            });
+            item.addEventListener('dragend', () => {
+                item.classList.remove('dragging');
+                this.saveCategoryPositions();
+            });
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                const dragging = this.elements.categoriesList.querySelector('.dragging');
+                if (dragging && item !== dragging) {
+                    const rect = item.getBoundingClientRect();
+                    const midY = rect.top + rect.height / 2;
+                    if (e.clientY < midY) {
+                        item.parentNode.insertBefore(dragging, item);
+                    } else {
+                        item.parentNode.insertBefore(dragging, item.nextSibling);
+                    }
+                }
+            });
+        });
+    },
+
+    async addCategory() {
+        const name = this.elements.newCategoryName.value.trim();
+        if (!name) return;
+
+        try {
+            await this.api('/api/categories', {
+                method: 'POST',
+                body: JSON.stringify({ name }),
+            });
+
+            this.elements.newCategoryName.value = '';
+            this.categories = await this.api('/api/categories');
+            this.renderCategoriesList();
+            this.renderCategoryTabs();
+            this.renderFormSelects();
+        } catch (error) {
+            alert('Error adding category');
+        }
+    },
+
+    async renameCategory(id) {
+        const cat = this.categories.find(c => c.id === id);
+        if (!cat) return;
+
+        const newName = prompt('Enter new name:', cat.name);
+        if (!newName || newName === cat.name) return;
+
+        try {
+            await this.api(`/api/categories/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name: newName }),
+            });
+
+            this.categories = await this.api('/api/categories');
+            this.renderCategoriesList();
+            this.renderCategoryTabs();
+            this.renderFormSelects();
+        } catch (error) {
+            alert('Error renaming category');
+        }
+    },
+
+    async deleteCategory(id) {
+        const cat = this.categories.find(c => c.id === id);
+        if (!cat || cat.is_default) return;
+
+        if (!confirm(`Delete "${cat.name}"? Items will be moved to Unsorted.`)) return;
+
+        try {
+            await this.api(`/api/categories/${id}`, {
+                method: 'DELETE',
+            });
+
+            this.categories = await this.api('/api/categories');
+            this.renderCategoriesList();
+            this.renderCategoryTabs();
+            this.renderFormSelects();
+            this.loadItems();
+        } catch (error) {
+            alert('Error deleting category');
+        }
+    },
+
+    async saveCategoryPositions() {
+        const items = this.elements.categoriesList.querySelectorAll('.sortable-item');
+        const positions = {};
+
+        items.forEach((item, index) => {
+            positions[item.dataset.id] = index;
+        });
+
+        await this.api('/api/categories/reorder', {
+            method: 'POST',
+            body: JSON.stringify({ positions }),
+        });
+
+        this.categories = await this.api('/api/categories');
+        this.renderCategoryTabs();
+    },
+
+    // List Management
+    showManageListsModal() {
+        this.elements.manageListsModal.classList.remove('hidden');
+        this.renderListsList();
+    },
+
+    renderListsList() {
+        let html = '';
+        for (const list of this.lists) {
+            const isDefault = list.is_default ? 'is-default' : '';
+            const deleteDisabled = list.is_default ? 'disabled' : '';
+
+            html += `
+                <div class="sortable-item ${isDefault}" data-id="${list.id}" draggable="true">
+                    <span class="drag-handle">&#9776;</span>
+                    <span class="item-name">${this.escapeHtml(list.name)}</span>
+                    <div class="item-actions">
+                        <button class="btn-icon-small rename-btn" data-id="${list.id}" title="Rename">&#9998;</button>
+                        <button class="btn-icon-small delete ${deleteDisabled}" data-id="${list.id}" title="Delete" ${deleteDisabled}>&#10005;</button>
+                    </div>
+                </div>
+            `;
+        }
+        this.elements.listsList.innerHTML = html;
+        this.bindListsListEvents();
+    },
+
+    bindListsListEvents() {
+        // Rename buttons
+        this.elements.listsList.querySelectorAll('.rename-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = parseInt(btn.dataset.id);
+                this.renameList(id);
+            });
+        });
+
+        // Delete buttons
+        this.elements.listsList.querySelectorAll('.delete:not([disabled])').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const id = parseInt(btn.dataset.id);
+                this.deleteList(id);
+            });
+        });
+
+        // Drag and drop for reordering
+        const items = this.elements.listsList.querySelectorAll('.sortable-item');
+        items.forEach(item => {
+            item.addEventListener('dragstart', (e) => {
+                item.classList.add('dragging');
+                e.dataTransfer.setData('text/plain', item.dataset.id);
+            });
+            item.addEventListener('dragend', () => {
+                item.classList.remove('dragging');
+                this.saveListPositions();
+            });
+            item.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                const dragging = this.elements.listsList.querySelector('.dragging');
+                if (dragging && item !== dragging) {
+                    const rect = item.getBoundingClientRect();
+                    const midY = rect.top + rect.height / 2;
+                    if (e.clientY < midY) {
+                        item.parentNode.insertBefore(dragging, item);
+                    } else {
+                        item.parentNode.insertBefore(dragging, item.nextSibling);
+                    }
+                }
+            });
+        });
+    },
+
+    async addList() {
+        const name = this.elements.newListName.value.trim();
+        if (!name) return;
+
+        try {
+            await this.api('/api/lists', {
+                method: 'POST',
+                body: JSON.stringify({ name }),
+            });
+
+            this.elements.newListName.value = '';
+            this.lists = await this.api('/api/lists');
+            this.renderListsList();
+            this.renderListDropdown();
+            this.renderFormSelects();
+        } catch (error) {
+            alert('Error adding list');
+        }
+    },
+
+    async renameList(id) {
+        const list = this.lists.find(l => l.id === id);
+        if (!list) return;
+
+        const newName = prompt('Enter new name:', list.name);
+        if (!newName || newName === list.name) return;
+
+        try {
+            await this.api(`/api/lists/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name: newName }),
+            });
+
+            this.lists = await this.api('/api/lists');
+            this.renderListsList();
+            this.renderListDropdown();
+            this.renderFormSelects();
+        } catch (error) {
+            alert('Error renaming list');
+        }
+    },
+
+    async deleteList(id) {
+        const list = this.lists.find(l => l.id === id);
+        if (!list || list.is_default) return;
+
+        if (!confirm(`Delete "${list.name}"? Items will be moved to Main List.`)) return;
+
+        try {
+            await this.api(`/api/lists/${id}`, {
+                method: 'DELETE',
+            });
+
+            this.lists = await this.api('/api/lists');
+            this.renderListsList();
+            this.renderListDropdown();
+            this.renderFormSelects();
+
+            // Reset filter if deleted list was selected
+            if (this.currentList === id) {
+                this.currentList = null;
+            }
+            this.loadItems();
+        } catch (error) {
+            alert('Error deleting list');
+        }
+    },
+
+    async saveListPositions() {
+        const items = this.elements.listsList.querySelectorAll('.sortable-item');
+        const positions = {};
+
+        items.forEach((item, index) => {
+            positions[item.dataset.id] = index;
+        });
+
+        await this.api('/api/lists/reorder', {
+            method: 'POST',
+            body: JSON.stringify({ positions }),
+        });
+
+        this.lists = await this.api('/api/lists');
+        this.renderListDropdown();
+    },
+
+    // Edit Item Modal
+    showEditItemModal(itemId) {
+        const item = this.items.find(i => i.id === itemId);
+        if (!item) return;
+
+        this.elements.editItemId.value = item.id;
+        this.elements.editItemCategory.value = item.category_id;
+        this.elements.editItemList.value = item.list_id;
+        this.elements.editItemQuantity.value = item.quantity || 1;
+
+        this.elements.editItemModal.classList.remove('hidden');
+    },
+
+    async saveItemEdit() {
+        const itemId = parseInt(this.elements.editItemId.value);
+        const updates = {
+            category_id: parseInt(this.elements.editItemCategory.value),
+            list_id: parseInt(this.elements.editItemList.value),
+            quantity: parseInt(this.elements.editItemQuantity.value) || 1,
+        };
+
+        try {
+            await this.api(`/api/items/${itemId}`, {
+                method: 'PATCH',
+                body: JSON.stringify(updates),
+            });
+
+            this.elements.editItemModal.classList.add('hidden');
+            await this.loadItems();
+        } catch (error) {
+            alert('Error updating item');
+        }
+    },
+
+    async deleteItem() {
+        const itemId = parseInt(this.elements.editItemId.value);
+        if (!confirm('Delete this item?')) return;
+
+        try {
+            await this.api(`/api/items/${itemId}`, {
+                method: 'DELETE',
+            });
+
+            this.elements.editItemModal.classList.add('hidden');
+            await this.loadItems();
+            await this.renderCategoryTabs();
+        } catch (error) {
+            alert('Error deleting item');
         }
     },
 

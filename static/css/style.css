@@ -578,6 +578,201 @@ form {
     background: #e66300;
 }
 
+/* Button variants */
+.btn-small {
+    min-height: 40px;
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+.btn-icon {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 8px;
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.btn-icon:hover {
+    background: var(--bg-color);
+    border-color: var(--primary-color);
+}
+
+.icon-gear {
+    font-size: 18px;
+}
+
+.btn-danger {
+    background: var(--warning-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+}
+
+/* Category controls */
+.category-controls {
+    margin-left: auto;
+}
+
+/* Modal body */
+.modal-body {
+    padding: 24px;
+}
+
+/* Add form in modals */
+.add-form {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.add-form input {
+    flex: 1;
+    min-height: 48px;
+    padding: 12px 16px;
+    font-size: 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.add-form input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+/* Sortable list */
+.sortable-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sortable-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--bg-color);
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    cursor: grab;
+}
+
+.sortable-item:hover {
+    border-color: var(--primary-color);
+}
+
+.sortable-item.dragging {
+    opacity: 0.5;
+}
+
+.sortable-item.drag-over {
+    border-color: var(--primary-color);
+    border-style: dashed;
+}
+
+.sortable-item .drag-handle {
+    color: var(--text-light);
+    font-size: 20px;
+    cursor: grab;
+}
+
+.sortable-item .item-name {
+    flex: 1;
+    font-weight: 500;
+}
+
+.sortable-item .item-name input {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--card-bg);
+}
+
+.sortable-item .item-name input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.sortable-item .item-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.sortable-item .btn-icon-small {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    font-size: 16px;
+    background: none;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-light);
+}
+
+.sortable-item .btn-icon-small:hover {
+    background: var(--card-bg);
+    color: var(--text-color);
+}
+
+.sortable-item .btn-icon-small.delete:hover {
+    color: var(--warning-color);
+    border-color: var(--warning-color);
+}
+
+.sortable-item.is-default {
+    background: #dbeafe;
+    border-color: var(--primary-color);
+}
+
+.sortable-item.is-default .item-name {
+    color: var(--primary-color);
+}
+
+/* Form row */
+.form-row {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+}
+
+.form-row .btn {
+    flex: 1;
+}
+
+/* Item card edit button */
+.item-card .edit-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 14px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.item-card:hover .edit-btn {
+    opacity: 1;
+}
+
+.item-card .edit-btn:hover {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
 /* Utility classes */
 .hidden {
     display: none !important;
