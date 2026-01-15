@@ -107,7 +107,43 @@ judis-wishlist/
 
 ## Chrome Extension
 
-The Chrome extension (coming soon) will allow importing items directly from Temu and Amazon cart pages.
+The Chrome extension allows importing items directly from Temu and Amazon cart pages.
+
+### Installing the Extension
+
+1. Open Chrome and go to `chrome://extensions`
+2. Enable "Developer mode" (toggle in top right)
+3. Click "Load unpacked"
+4. Select the `extension/` folder from this project
+5. The extension icon should appear in your toolbar
+
+### Using the Extension
+
+1. Make sure the wishlist app is running (`python app.py`)
+2. Go to your Temu or Amazon cart page
+3. Click the extension icon in Chrome toolbar
+4. Select which list to add items to
+5. Click "Import Cart Items"
+6. Items will appear in your wishlist!
+
+### Extension Structure
+
+```
+extension/
+├── manifest.json           # Extension configuration (Manifest V3)
+├── popup/
+│   ├── popup.html          # Extension popup UI
+│   ├── popup.css           # Popup styles
+│   └── popup.js            # Popup logic and scraping
+├── content/
+│   ├── temu.js             # Temu-specific utilities
+│   └── amazon.js           # Amazon-specific utilities
+├── background.js           # Service worker
+└── icons/
+    ├── icon16.png
+    ├── icon48.png
+    └── icon128.png
+```
 
 ## Tech Stack
 
