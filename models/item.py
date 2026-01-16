@@ -290,5 +290,43 @@ class Item:
         ''')
         stats['recently_added'] = cursor.fetchone()[0]
 
+        # Oldest item age
+        cursor.execute('''
+            SELECT date_added FROM items
+            ORDER BY date_added ASC LIMIT 1
+        ''')
+        oldest = cursor.fetchone()
+        if oldest and oldest[0]:
+            from datetime import datetime
+            try:
+                oldest_date = datetime.fromisoformat(oldest[0].replace('Z', '+00:00'))
+                now = datetime.now()
+                diff_days = (now - oldest_date).days
+                if diff_days == 0:
+                    stats['oldest_item_age'] = 'Today'
+                elif diff_days == 1:
+                    stats['oldest_item_age'] = '1 day'
+                elif diff_days < 7:
+                    stats['oldest_item_age'] = f'{diff_days} days'
+                elif diff_days < 30:
+                    stats['oldest_item_age'] = f'{diff_days // 7} weeks'
+                elif diff_days < 365:
+                    stats['oldest_item_age'] = f'{diff_days // 30} months'
+                else:
+                    stats['oldest_item_age'] = f'{diff_days // 365} years'
+            except:
+                stats['oldest_item_age'] = '-'
+        else:
+            stats['oldest_item_age'] = '-'
+
+        # Price drops count
+        cursor.execute('''
+            SELECT COUNT(*) FROM items
+            WHERE original_price IS NOT NULL
+            AND current_price IS NOT NULL
+            AND current_price < original_price
+        ''')
+        stats['price_drops'] = cursor.fetchone()[0]
+
         conn.close()
         return stats

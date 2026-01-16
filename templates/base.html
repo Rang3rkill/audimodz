@@ -9,7 +9,14 @@
 <body>
     <header class="header">
         <h1 class="header-title">Judi's Wishlist</h1>
+        <div class="search-container">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search items...">
+            <button id="clearSearch" class="clear-search-btn hidden">&times;</button>
+        </div>
         <div class="header-actions">
+            <button id="viewToggle" class="btn btn-icon" title="Toggle view">
+                <span id="viewIcon">&#9638;</span>
+            </button>
             <button id="caretakerToggle" class="btn btn-secondary btn-small">
                 <span class="caretaker-icon">&#9881;</span> Caretaker
             </button>
@@ -47,6 +54,28 @@
                 <div class="store-stats" id="storeStats"></div>
             </div>
 
+            <!-- Budget Tracker -->
+            <div class="caretaker-section budget-section">
+                <h3>Budget Tracker</h3>
+                <div class="budget-input-row">
+                    <label for="budgetInput">Monthly Budget:</label>
+                    <div class="budget-input-group">
+                        <span class="budget-currency">$</span>
+                        <input type="number" id="budgetInput" class="budget-input" placeholder="0" min="0" step="10">
+                        <button id="saveBudget" class="btn btn-small">Set</button>
+                    </div>
+                </div>
+                <div class="budget-display" id="budgetDisplay">
+                    <div class="budget-bar-container">
+                        <div class="budget-bar" id="budgetBar"></div>
+                    </div>
+                    <div class="budget-info">
+                        <span id="budgetSpent">$0</span> of <span id="budgetTotal">$0</span>
+                        <span id="budgetRemaining" class="budget-remaining"></span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Quick Actions -->
             <div class="caretaker-section">
                 <h3>Quick Actions</h3>
@@ -74,6 +103,14 @@
                     <div class="activity-row">
                         <span>Favorites:</span>
                         <span id="statFavorites">0 items</span>
+                    </div>
+                    <div class="activity-row">
+                        <span>Oldest item:</span>
+                        <span id="statOldestItem">-</span>
+                    </div>
+                    <div class="activity-row">
+                        <span>Price drops:</span>
+                        <span id="statPriceDrops">0 items</span>
                     </div>
                 </div>
             </div>

@@ -5,10 +5,14 @@ const App = {
     categories: [],
     lists: [],
     items: [],
+    filteredItems: [],
     stats: {},
     currentCategory: null,
     currentList: null,
     showingReadyToBuy: false,
+    searchQuery: '',
+    viewMode: 'grid', // 'grid' or 'gallery'
+    budget: 0,
 
     // DOM Elements
     elements: {},
@@ -16,9 +20,27 @@ const App = {
     // Initialize the app
     async init() {
         this.cacheElements();
+        this.loadSettings();
         this.bindEvents();
         await this.loadData();
         this.render();
+    },
+
+    // Load settings from localStorage
+    loadSettings() {
+        // Load budget
+        const savedBudget = localStorage.getItem('wishlist_budget');
+        if (savedBudget) {
+            this.budget = parseFloat(savedBudget);
+            if (this.elements.budgetInput) {
+                this.elements.budgetInput.value = this.budget;
+            }
+        }
+        // Load view mode
+        const savedView = localStorage.getItem('wishlist_view_mode');
+        if (savedView) {
+            this.viewMode = savedView;
+        }
     },
 
     // Cache DOM elements
@@ -79,6 +101,23 @@ const App = {
             // Caretaker action buttons
             manageCategoriesBtn2: document.getElementById('manageCategoriesBtn2'),
             manageListsBtn2: document.getElementById('manageListsBtn2'),
+            // Search
+            searchInput: document.getElementById('searchInput'),
+            clearSearch: document.getElementById('clearSearch'),
+            // View toggle
+            viewToggle: document.getElementById('viewToggle'),
+            viewIcon: document.getElementById('viewIcon'),
+            // Budget tracker
+            budgetInput: document.getElementById('budgetInput'),
+            saveBudget: document.getElementById('saveBudget'),
+            budgetDisplay: document.getElementById('budgetDisplay'),
+            budgetBar: document.getElementById('budgetBar'),
+            budgetSpent: document.getElementById('budgetSpent'),
+            budgetTotal: document.getElementById('budgetTotal'),
+            budgetRemaining: document.getElementById('budgetRemaining'),
+            // Additional stats
+            statOldestItem: document.getElementById('statOldestItem'),
+            statPriceDrops: document.getElementById('statPriceDrops'),
         };
     },
 
@@ -145,6 +184,31 @@ const App = {
 
         this.elements.closeCaretaker?.addEventListener('click', () => {
             this.hideCaretakerPanel();
+        });
+
+        // Search functionality
+        this.elements.searchInput?.addEventListener('input', (e) => {
+            this.handleSearch(e.target.value);
+        });
+
+        this.elements.clearSearch?.addEventListener('click', () => {
+            this.clearSearch();
+        });
+
+        // View toggle
+        this.elements.viewToggle?.addEventListener('click', () => {
+            this.toggleViewMode();
+        });
+
+        // Budget tracker
+        this.elements.saveBudget?.addEventListener('click', () => {
+            this.saveBudget();
+        });
+
+        this.elements.budgetInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.saveBudget();
+            }
         });
 
         // Close buttons for all modals
@@ -259,6 +323,8 @@ const App = {
         this.renderFormSelects();
         this.renderItems();
         this.renderStats();
+        this.renderBudget();
+        this.applyViewMode();
     },
 
     // Render stats in caretaker panel
@@ -283,6 +349,12 @@ const App = {
         }
         if (this.elements.statFavorites) {
             this.elements.statFavorites.textContent = (this.stats.favorites || 0) + ' items';
+        }
+        if (this.elements.statOldestItem) {
+            this.elements.statOldestItem.textContent = this.stats.oldest_item_age || '-';
+        }
+        if (this.elements.statPriceDrops) {
+            this.elements.statPriceDrops.textContent = (this.stats.price_drops || 0) + ' items';
         }
 
         // Render store stats
@@ -319,6 +391,142 @@ const App = {
 
     hideCaretakerPanel() {
         this.elements.caretakerPanel?.classList.add('hidden');
+    },
+
+    // Search functionality
+    handleSearch(query) {
+        this.searchQuery = query.toLowerCase().trim();
+
+        // Show/hide clear button
+        if (this.elements.clearSearch) {
+            this.elements.clearSearch.classList.toggle('hidden', !this.searchQuery);
+        }
+
+        this.renderItems();
+    },
+
+    clearSearch() {
+        this.searchQuery = '';
+        if (this.elements.searchInput) {
+            this.elements.searchInput.value = '';
+        }
+        if (this.elements.clearSearch) {
+            this.elements.clearSearch.classList.add('hidden');
+        }
+        this.renderItems();
+    },
+
+    // Filter items by search query
+    getFilteredItems() {
+        if (!this.searchQuery) {
+            return this.items;
+        }
+        return this.items.filter(item => {
+            const title = (item.title || '').toLowerCase();
+            const store = (item.store || '').toLowerCase();
+            const notes = (item.notes || '').toLowerCase();
+            return title.includes(this.searchQuery) ||
+                   store.includes(this.searchQuery) ||
+                   notes.includes(this.searchQuery);
+        });
+    },
+
+    // View mode toggle
+    toggleViewMode() {
+        this.viewMode = this.viewMode === 'grid' ? 'gallery' : 'grid';
+        localStorage.setItem('wishlist_view_mode', this.viewMode);
+        this.applyViewMode();
+    },
+
+    applyViewMode() {
+        // Update icon
+        if (this.elements.viewIcon) {
+            this.elements.viewIcon.innerHTML = this.viewMode === 'grid' ? '&#9638;' : '&#9783;';
+        }
+
+        // Apply class to grid
+        if (this.elements.itemsGrid) {
+            this.elements.itemsGrid.classList.remove('grid-view', 'gallery-view');
+            this.elements.itemsGrid.classList.add(this.viewMode === 'grid' ? 'grid-view' : 'gallery-view');
+        }
+    },
+
+    // Budget tracker
+    saveBudget() {
+        const value = parseFloat(this.elements.budgetInput?.value) || 0;
+        this.budget = value;
+        localStorage.setItem('wishlist_budget', value.toString());
+        this.renderBudget();
+        this.showToast('Budget saved!');
+    },
+
+    renderBudget() {
+        if (!this.budget || this.budget <= 0) {
+            if (this.elements.budgetDisplay) {
+                this.elements.budgetDisplay.style.display = 'none';
+            }
+            return;
+        }
+
+        const spent = this.stats.ready_to_buy_value || 0;
+        const percentage = Math.min((spent / this.budget) * 100, 100);
+        const remaining = this.budget - spent;
+
+        if (this.elements.budgetDisplay) {
+            this.elements.budgetDisplay.style.display = 'block';
+        }
+        if (this.elements.budgetBar) {
+            this.elements.budgetBar.style.width = percentage + '%';
+            this.elements.budgetBar.classList.toggle('over-budget', spent > this.budget);
+        }
+        if (this.elements.budgetSpent) {
+            this.elements.budgetSpent.textContent = '$' + spent.toFixed(2);
+        }
+        if (this.elements.budgetTotal) {
+            this.elements.budgetTotal.textContent = '$' + this.budget.toFixed(2);
+        }
+        if (this.elements.budgetRemaining) {
+            if (remaining >= 0) {
+                this.elements.budgetRemaining.textContent = '($' + remaining.toFixed(2) + ' left)';
+                this.elements.budgetRemaining.className = 'budget-remaining';
+            } else {
+                this.elements.budgetRemaining.textContent = '($' + Math.abs(remaining).toFixed(2) + ' over!)';
+                this.elements.budgetRemaining.className = 'budget-remaining over';
+            }
+        }
+    },
+
+    // Toast notification
+    showToast(message, type = 'success') {
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
+
+        // Trigger animation
+        setTimeout(() => toast.classList.add('show'), 10);
+
+        // Remove after 2 seconds
+        setTimeout(() => {
+            toast.classList.remove('show');
+            setTimeout(() => toast.remove(), 300);
+        }, 2000);
+    },
+
+    // Format relative time
+    formatRelativeTime(dateString) {
+        if (!dateString) return '';
+        const date = new Date(dateString);
+        const now = new Date();
+        const diffMs = now - date;
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+        if (diffDays === 0) return 'Today';
+        if (diffDays === 1) return 'Yesterday';
+        if (diffDays < 7) return diffDays + ' days ago';
+        if (diffDays < 30) return Math.floor(diffDays / 7) + ' weeks ago';
+        if (diffDays < 365) return Math.floor(diffDays / 30) + ' months ago';
+        return Math.floor(diffDays / 365) + ' years ago';
     },
 
     // Render category tabs
@@ -404,6 +612,11 @@ const App = {
         this.elements.readyToBuySection.classList.add('hidden');
         this.elements.itemsGrid.classList.remove('hidden');
 
+        // Apply view mode class
+        this.applyViewMode();
+
+        const filteredItems = this.getFilteredItems();
+
         if (this.items.length === 0) {
             this.elements.itemsGrid.innerHTML = `
                 <div class="empty-state">
@@ -415,8 +628,19 @@ const App = {
             return;
         }
 
+        if (filteredItems.length === 0 && this.searchQuery) {
+            this.elements.itemsGrid.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">&#128269;</div>
+                    <h3>No matches found</h3>
+                    <p>Try a different search term or <button class="btn-link" onclick="App.clearSearch()">clear the search</button>.</p>
+                </div>
+            `;
+            return;
+        }
+
         let html = '';
-        for (const item of this.items) {
+        for (const item of filteredItems) {
             html += this.renderItemCard(item);
         }
         this.elements.itemsGrid.innerHTML = html;
@@ -472,6 +696,20 @@ const App = {
             ? `<span class="notes-indicator" title="${this.escapeHtml(item.notes)}">&#128221; ${this.escapeHtml(item.notes)}</span>`
             : '';
 
+        // Item age badge
+        const itemAge = this.formatRelativeTime(item.date_added);
+        const ageBadge = itemAge ? `<span class="age-badge" title="Added ${itemAge}">${itemAge}</span>` : '';
+
+        // Quick quantity controls
+        const qty = item.quantity || 1;
+        const qtyControls = `
+            <div class="qty-controls">
+                <button class="qty-btn qty-minus" data-id="${item.id}" title="Decrease quantity">-</button>
+                <span class="qty-value">${qty}</span>
+                <button class="qty-btn qty-plus" data-id="${item.id}" title="Increase quantity">+</button>
+            </div>
+        `;
+
         return `
             <div class="item-card" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
@@ -480,6 +718,7 @@ const App = {
                     <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}
+                    ${ageBadge}
                     ${notesHtml}
                 </div>
                 <div class="item-details">
@@ -489,6 +728,7 @@ const App = {
                             <span class="item-price">${price}</span>
                             ${priceChangeHtml}
                         </div>
+                        ${qtyControls}
                         <input type="checkbox" class="item-checkbox" data-id="${item.id}" ${checked} title="Add to cart">
                     </div>
                 </div>
@@ -524,6 +764,23 @@ const App = {
             });
         });
 
+        // Quick quantity buttons
+        this.elements.itemsGrid.querySelectorAll('.qty-minus').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemId = parseInt(btn.dataset.id);
+                this.adjustQuantity(itemId, -1);
+            });
+        });
+
+        this.elements.itemsGrid.querySelectorAll('.qty-plus').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemId = parseInt(btn.dataset.id);
+                this.adjustQuantity(itemId, 1);
+            });
+        });
+
         // Drag and drop
         const cards = this.elements.itemsGrid.querySelectorAll('.item-card');
         cards.forEach(card => {
@@ -553,6 +810,36 @@ const App = {
 
         // Update local state
         item.is_favorite = newValue;
+        await this.loadStats();
+    },
+
+    // Adjust item quantity
+    async adjustQuantity(itemId, delta) {
+        const item = this.items.find(i => i.id === itemId);
+        if (!item) return;
+
+        const newQty = Math.max(1, (item.quantity || 1) + delta);
+
+        // Update local state immediately for responsive UI
+        item.quantity = newQty;
+
+        // Update display
+        const card = this.elements.itemsGrid.querySelector(`.item-card[data-id="${itemId}"]`);
+        if (card) {
+            const qtyDisplay = card.querySelector('.qty-value');
+            if (qtyDisplay) {
+                qtyDisplay.textContent = newQty;
+                qtyDisplay.classList.add('qty-changed');
+                setTimeout(() => qtyDisplay.classList.remove('qty-changed'), 200);
+            }
+        }
+
+        // Save to server
+        await this.api(`/api/items/${itemId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ quantity: newQty }),
+        });
+
         await this.loadStats();
     },
 

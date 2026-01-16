@@ -1162,4 +1162,313 @@ form {
     .category-controls {
         margin-left: 0;
     }
+
+    .search-container {
+        width: 100%;
+        order: 1;
+    }
+}
+
+/* ==========================================
+   NEW FEATURES - Search, Gallery, Budget, etc.
+   ========================================== */
+
+/* Search bar */
+.search-container {
+    position: relative;
+    flex: 1;
+    max-width: 400px;
+    margin: 0 20px;
+}
+
+.search-input {
+    width: 100%;
+    padding: 12px 40px 12px 16px;
+    font-size: 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 25px;
+    background: var(--bg-color);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.search-input::placeholder {
+    color: var(--text-light);
+}
+
+.clear-search-btn {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--text-light);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+}
+
+.clear-search-btn:hover {
+    background: var(--text-color);
+}
+
+/* View toggle */
+.btn-icon {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Gallery view */
+.items-grid.gallery-view {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 24px;
+}
+
+.gallery-view .item-card {
+    border-radius: 16px;
+}
+
+.gallery-view .item-image-container {
+    height: 280px;
+}
+
+.gallery-view .item-image {
+    height: 280px;
+}
+
+.gallery-view .item-details {
+    padding: 20px;
+}
+
+.gallery-view .item-title {
+    font-size: 18px;
+    -webkit-line-clamp: 3;
+}
+
+.gallery-view .item-price {
+    font-size: 26px;
+}
+
+/* Budget tracker */
+.budget-section {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+    border-radius: 12px;
+    padding: 16px;
+    margin: -12px;
+    margin-bottom: 12px;
+}
+
+.budget-input-row {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.budget-input-row label {
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+.budget-input-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.budget-currency {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-light);
+}
+
+.budget-input {
+    flex: 1;
+    padding: 8px 12px;
+    font-size: 16px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    max-width: 120px;
+}
+
+.budget-input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+}
+
+.budget-display {
+    margin-top: 12px;
+}
+
+.budget-bar-container {
+    height: 12px;
+    background: #dbeafe;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.budget-bar {
+    height: 100%;
+    background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+    border-radius: 6px;
+    transition: width 0.3s ease;
+}
+
+.budget-bar.over-budget {
+    background: linear-gradient(90deg, #ef4444 0%, #dc2626 100%);
+}
+
+.budget-info {
+    font-size: 14px;
+    color: var(--text-light);
+    text-align: center;
+}
+
+.budget-remaining {
+    display: block;
+    margin-top: 4px;
+    font-weight: 600;
+    color: var(--success-color);
+}
+
+.budget-remaining.over {
+    color: var(--warning-color);
+}
+
+/* Age badge */
+.age-badge {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+/* Quick quantity controls */
+.qty-controls {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--bg-color);
+    border-radius: 20px;
+    padding: 2px;
+}
+
+.qty-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: var(--card-bg);
+    color: var(--text-color);
+    border-radius: 50%;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.qty-btn:hover {
+    background: var(--primary-color);
+    color: white;
+}
+
+.qty-btn:active {
+    transform: scale(0.9);
+}
+
+.qty-value {
+    min-width: 24px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 14px;
+    transition: transform 0.2s;
+}
+
+.qty-value.qty-changed {
+    transform: scale(1.2);
+    color: var(--primary-color);
+}
+
+/* Toast notifications */
+.toast {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: var(--text-color);
+    color: white;
+    padding: 12px 24px;
+    border-radius: 25px;
+    font-weight: 500;
+    z-index: 1000;
+    opacity: 0;
+    transition: all 0.3s ease;
+    box-shadow: var(--shadow-hover);
+}
+
+.toast.show {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+
+.toast-success {
+    background: var(--success-color);
+}
+
+.toast-error {
+    background: var(--warning-color);
+}
+
+/* Button link style */
+.btn-link {
+    background: none;
+    border: none;
+    color: var(--primary-color);
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: inherit;
+    padding: 0;
+}
+
+.btn-link:hover {
+    color: var(--primary-hover);
+}
+
+/* Item price row adjustments for qty controls */
+.item-price-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* Adjust checkbox size */
+.item-checkbox {
+    flex-shrink: 0;
 }
