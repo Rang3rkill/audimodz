@@ -118,6 +118,14 @@ def get_stats():
     return jsonify(stats)
 
 
+@items_bp.route('/duplicates', methods=['GET'])
+def get_duplicates():
+    """Get potential duplicate items based on title similarity."""
+    threshold = request.args.get('threshold', 0.5, type=float)
+    duplicates = Item.find_potential_duplicates(threshold)
+    return jsonify(duplicates)
+
+
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""

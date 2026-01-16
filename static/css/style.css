@@ -1472,3 +1472,203 @@ form {
 .item-checkbox {
     flex-shrink: 0;
 }
+
+/* ==========================================
+   DUPLICATE DETECTION
+   ========================================== */
+
+.duplicates-section h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.duplicate-count {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-light);
+}
+
+.duplicate-count.has-duplicates {
+    background: #fef3c7;
+    color: #92400e;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+.duplicates-list {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.duplicates-loading,
+.no-duplicates {
+    color: var(--text-light);
+    font-style: italic;
+    text-align: center;
+    padding: 16px;
+}
+
+.no-duplicates {
+    color: var(--success-color);
+}
+
+.duplicate-pair {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 12px;
+}
+
+.duplicate-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.similarity-badge {
+    background: #fbbf24;
+    color: #78350f;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 10px;
+}
+
+.same-store {
+    font-size: 11px;
+    color: #dc2626;
+    background: #fee2e2;
+    padding: 2px 6px;
+    border-radius: 8px;
+}
+
+.diff-store {
+    font-size: 11px;
+    color: #059669;
+    background: #d1fae5;
+    padding: 2px 6px;
+    border-radius: 8px;
+}
+
+.duplicate-items {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.duplicate-item {
+    flex: 1;
+    display: flex;
+    gap: 8px;
+    background: white;
+    padding: 8px;
+    border-radius: 8px;
+}
+
+.duplicate-item img {
+    width: 50px;
+    height: 50px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.duplicate-item .no-img {
+    width: 50px;
+    height: 50px;
+    background: var(--bg-color);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-light);
+    flex-shrink: 0;
+}
+
+.duplicate-item-info {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.duplicate-title {
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.duplicate-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+.store-tag {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.store-tag.temu {
+    background: #fff7ed;
+    color: #c2410c;
+}
+
+.store-tag.amazon {
+    background: #fefce8;
+    color: #a16207;
+}
+
+.duplicate-vs {
+    display: flex;
+    align-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-light);
+    padding: 0 4px;
+}
+
+.duplicate-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.duplicate-actions .btn {
+    flex: 1;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+.btn-danger {
+    background: #dc2626;
+    color: white;
+    border: none;
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+}
+
+/* Slide out animation for dismissed duplicates */
+@keyframes slideOut {
+    to {
+        opacity: 0;
+        transform: translateX(100%);
+        height: 0;
+        padding: 0;
+        margin: 0;
+    }
+}

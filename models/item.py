@@ -330,3 +330,90 @@ class Item:
 
         conn.close()
         return stats
+
+    @staticmethod
+    def normalize_title(title):
+        """Normalize a title for comparison."""
+        if not title:
+            return ''
+        import re
+        # Lowercase and remove special characters
+        normalized = title.lower()
+        normalized = re.sub(r'[^\w\s]', ' ', normalized)
+        # Remove extra whitespace
+        normalized = ' '.join(normalized.split())
+        return normalized
+
+    @staticmethod
+    def get_title_tokens(title):
+        """Get meaningful tokens from a title."""
+        if not title:
+            return set()
+        normalized = Item.normalize_title(title)
+        # Remove common filler words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'for', 'with', 'of', 'to', 'in', 'on', 'set', 'pcs', 'pc', 'pack', 'pieces', 'piece'}
+        tokens = set(normalized.split())
+        return tokens - stop_words
+
+    @staticmethod
+    def calculate_similarity(title1, title2):
+        """Calculate similarity score between two titles (0-1)."""
+        tokens1 = Item.get_title_tokens(title1)
+        tokens2 = Item.get_title_tokens(title2)
+
+        if not tokens1 or not tokens2:
+            return 0
+
+        # Jaccard similarity
+        intersection = tokens1 & tokens2
+        union = tokens1 | tokens2
+
+        if not union:
+            return 0
+
+        return len(intersection) / len(union)
+
+    @staticmethod
+    def find_potential_duplicates(threshold=0.5):
+        """Find potential duplicate items based on title similarity."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT id, title, store, image_url, current_price, date_added
+            FROM items ORDER BY date_added DESC
+        ''')
+        items = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+
+        if len(items) < 2:
+            return []
+
+        duplicates = []
+        seen_pairs = set()
+
+        for i, item1 in enumerate(items):
+            for j, item2 in enumerate(items):
+                if i >= j:
+                    continue
+
+                # Skip if already seen this pair
+                pair_key = tuple(sorted([item1['id'], item2['id']]))
+                if pair_key in seen_pairs:
+                    continue
+
+                similarity = Item.calculate_similarity(item1['title'], item2['title'])
+
+                if similarity >= threshold:
+                    seen_pairs.add(pair_key)
+                    duplicates.append({
+                        'item1': item1,
+                        'item2': item2,
+                        'similarity': round(similarity * 100),
+                        'same_store': item1['store'] == item2['store']
+                    })
+
+        # Sort by similarity descending
+        duplicates.sort(key=lambda x: x['similarity'], reverse=True)
+
+        return duplicates

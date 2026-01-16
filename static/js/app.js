@@ -118,6 +118,9 @@ const App = {
             // Additional stats
             statOldestItem: document.getElementById('statOldestItem'),
             statPriceDrops: document.getElementById('statPriceDrops'),
+            // Duplicates
+            duplicateCount: document.getElementById('duplicateCount'),
+            duplicatesList: document.getElementById('duplicatesList'),
         };
     },
 
@@ -386,6 +389,7 @@ const App = {
         this.elements.caretakerPanel?.classList.toggle('hidden');
         if (!this.elements.caretakerPanel?.classList.contains('hidden')) {
             this.loadStats();
+            this.loadDuplicates();
         }
     },
 
@@ -494,6 +498,117 @@ const App = {
                 this.elements.budgetRemaining.className = 'budget-remaining over';
             }
         }
+    },
+
+    // Duplicates detection
+    async loadDuplicates() {
+        try {
+            const duplicates = await this.api('/api/items/duplicates');
+            this.renderDuplicates(duplicates);
+        } catch (error) {
+            console.error('Error loading duplicates:', error);
+        }
+    },
+
+    renderDuplicates(duplicates) {
+        if (!this.elements.duplicatesList) return;
+
+        // Update count badge
+        if (this.elements.duplicateCount) {
+            this.elements.duplicateCount.textContent = duplicates.length > 0 ? `(${duplicates.length})` : '';
+            this.elements.duplicateCount.classList.toggle('has-duplicates', duplicates.length > 0);
+        }
+
+        if (duplicates.length === 0) {
+            this.elements.duplicatesList.innerHTML = `
+                <p class="no-duplicates">No potential duplicates found</p>
+            `;
+            return;
+        }
+
+        let html = '';
+        for (const dup of duplicates) {
+            const item1 = dup.item1;
+            const item2 = dup.item2;
+            const img1 = item1.image_url ? `<img src="${item1.image_url}" alt="">` : '<div class="no-img">?</div>';
+            const img2 = item2.image_url ? `<img src="${item2.image_url}" alt="">` : '<div class="no-img">?</div>';
+            const storeMatch = dup.same_store ? '<span class="same-store">Same store</span>' : '<span class="diff-store">Different stores</span>';
+
+            html += `
+                <div class="duplicate-pair" data-id1="${item1.id}" data-id2="${item2.id}">
+                    <div class="duplicate-header">
+                        <span class="similarity-badge">${dup.similarity}% match</span>
+                        ${storeMatch}
+                    </div>
+                    <div class="duplicate-items">
+                        <div class="duplicate-item">
+                            ${img1}
+                            <div class="duplicate-item-info">
+                                <div class="duplicate-title">${this.escapeHtml(item1.title)}</div>
+                                <div class="duplicate-meta">
+                                    <span class="store-tag ${item1.store}">${item1.store}</span>
+                                    ${item1.current_price ? '$' + item1.current_price.toFixed(2) : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="duplicate-vs">VS</div>
+                        <div class="duplicate-item">
+                            ${img2}
+                            <div class="duplicate-item-info">
+                                <div class="duplicate-title">${this.escapeHtml(item2.title)}</div>
+                                <div class="duplicate-meta">
+                                    <span class="store-tag ${item2.store}">${item2.store}</span>
+                                    ${item2.current_price ? '$' + item2.current_price.toFixed(2) : ''}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="duplicate-actions">
+                        <button class="btn btn-small btn-danger delete-dup" data-id="${item2.id}" title="Remove newer item">Delete #2</button>
+                        <button class="btn btn-small dismiss-dup" data-id1="${item1.id}" data-id2="${item2.id}" title="Not a duplicate">Dismiss</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        this.elements.duplicatesList.innerHTML = html;
+        this.bindDuplicateEvents();
+    },
+
+    bindDuplicateEvents() {
+        // Delete duplicate button
+        this.elements.duplicatesList.querySelectorAll('.delete-dup').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const itemId = parseInt(btn.dataset.id);
+                if (confirm('Delete this item?')) {
+                    await this.api(`/api/items/${itemId}`, { method: 'DELETE' });
+                    this.showToast('Item deleted');
+                    await this.loadItems();
+                    await this.loadDuplicates();
+                    await this.loadStats();
+                }
+            });
+        });
+
+        // Dismiss duplicate (just removes from view for this session)
+        this.elements.duplicatesList.querySelectorAll('.dismiss-dup').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const pair = btn.closest('.duplicate-pair');
+                pair.style.animation = 'slideOut 0.3s ease forwards';
+                setTimeout(() => {
+                    pair.remove();
+                    // Update count
+                    const remaining = this.elements.duplicatesList.querySelectorAll('.duplicate-pair').length;
+                    if (this.elements.duplicateCount) {
+                        this.elements.duplicateCount.textContent = remaining > 0 ? `(${remaining})` : '';
+                        this.elements.duplicateCount.classList.toggle('has-duplicates', remaining > 0);
+                    }
+                    if (remaining === 0) {
+                        this.elements.duplicatesList.innerHTML = '<p class="no-duplicates">No potential duplicates found</p>';
+                    }
+                }, 300);
+            });
+        });
     },
 
     // Toast notification
