@@ -13,6 +13,12 @@ const App = {
     searchQuery: '',
     viewMode: 'grid', // 'grid' or 'gallery'
     budget: 0,
+    balance: null,
+    sessionStartTime: Date.now(),
+    breakReminderInterval: 30 * 60 * 1000, // 30 minutes
+    breakRemindersEnabled: true,
+    lastBreakReminder: Date.now(),
+    breakSnoozed: false,
 
     // DOM Elements
     elements: {},
@@ -24,6 +30,8 @@ const App = {
         this.bindEvents();
         await this.loadData();
         this.render();
+        this.startDateTime();
+        this.startSessionTimer();
     },
 
     // Load settings from localStorage
@@ -40,6 +48,19 @@ const App = {
         const savedView = localStorage.getItem('wishlist_view_mode');
         if (savedView) {
             this.viewMode = savedView;
+        }
+        // Load balance
+        const savedBalance = localStorage.getItem('wishlist_balance');
+        if (savedBalance) {
+            this.balance = parseFloat(savedBalance);
+            if (this.elements.balanceInput) {
+                this.elements.balanceInput.value = this.balance;
+            }
+        }
+        // Load break reminder setting
+        const breakSetting = localStorage.getItem('wishlist_break_reminders');
+        if (breakSetting !== null) {
+            this.breakRemindersEnabled = breakSetting === 'true';
         }
     },
 
@@ -121,6 +142,18 @@ const App = {
             // Duplicates
             duplicateCount: document.getElementById('duplicateCount'),
             duplicatesList: document.getElementById('duplicatesList'),
+            // Date/Time/Balance
+            dateDisplay: document.getElementById('dateDisplay'),
+            timeDisplay: document.getElementById('timeDisplay'),
+            balanceDisplay: document.getElementById('balanceDisplay'),
+            balanceInput: document.getElementById('balanceInput'),
+            saveBalance: document.getElementById('saveBalance'),
+            // Break reminders
+            breakReminder: document.getElementById('breakReminder'),
+            sessionTimeDisplay: document.getElementById('sessionTimeDisplay'),
+            dismissBreak: document.getElementById('dismissBreak'),
+            snoozeBreak: document.getElementById('snoozeBreak'),
+            breakRemindersEnabled: document.getElementById('breakRemindersEnabled'),
         };
     },
 
@@ -212,6 +245,31 @@ const App = {
             if (e.key === 'Enter') {
                 this.saveBudget();
             }
+        });
+
+        // Balance
+        this.elements.saveBalance?.addEventListener('click', () => {
+            this.saveBalance();
+        });
+
+        this.elements.balanceInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                this.saveBalance();
+            }
+        });
+
+        // Break reminders
+        this.elements.dismissBreak?.addEventListener('click', () => {
+            this.dismissBreakReminder();
+        });
+
+        this.elements.snoozeBreak?.addEventListener('click', () => {
+            this.snoozeBreakReminder();
+        });
+
+        this.elements.breakRemindersEnabled?.addEventListener('change', (e) => {
+            this.breakRemindersEnabled = e.target.checked;
+            localStorage.setItem('wishlist_break_reminders', this.breakRemindersEnabled.toString());
         });
 
         // Close buttons for all modals
@@ -327,7 +385,12 @@ const App = {
         this.renderItems();
         this.renderStats();
         this.renderBudget();
+        this.renderBalance();
         this.applyViewMode();
+        // Set break reminder checkbox
+        if (this.elements.breakRemindersEnabled) {
+            this.elements.breakRemindersEnabled.checked = this.breakRemindersEnabled;
+        }
     },
 
     // Render stats in caretaker panel
@@ -498,6 +561,109 @@ const App = {
                 this.elements.budgetRemaining.className = 'budget-remaining over';
             }
         }
+    },
+
+    // Balance management
+    saveBalance() {
+        const value = parseFloat(this.elements.balanceInput?.value) || 0;
+        this.balance = value;
+        localStorage.setItem('wishlist_balance', value.toString());
+        this.renderBalance();
+        this.showToast('Balance updated!');
+    },
+
+    renderBalance() {
+        if (this.elements.balanceDisplay) {
+            if (this.balance !== null && this.balance >= 0) {
+                this.elements.balanceDisplay.textContent = '$' + this.balance.toFixed(2);
+                this.elements.balanceDisplay.classList.toggle('low-balance', this.balance < 50);
+            } else {
+                this.elements.balanceDisplay.textContent = '--';
+            }
+        }
+        if (this.elements.balanceInput && this.balance !== null) {
+            this.elements.balanceInput.value = this.balance;
+        }
+    },
+
+    // Date and time display
+    startDateTime() {
+        this.updateDateTime();
+        // Update every second
+        setInterval(() => this.updateDateTime(), 1000);
+    },
+
+    updateDateTime() {
+        const now = new Date();
+
+        // Format date: "Friday, January 17, 2025"
+        const dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+        const dateStr = now.toLocaleDateString('en-US', dateOptions);
+
+        // Format time: "2:30 PM"
+        const timeOptions = { hour: 'numeric', minute: '2-digit', hour12: true };
+        const timeStr = now.toLocaleTimeString('en-US', timeOptions);
+
+        if (this.elements.dateDisplay) {
+            this.elements.dateDisplay.textContent = dateStr;
+        }
+        if (this.elements.timeDisplay) {
+            this.elements.timeDisplay.textContent = timeStr;
+        }
+    },
+
+    // Session timer and break reminders
+    startSessionTimer() {
+        this.sessionStartTime = Date.now();
+        this.lastBreakReminder = Date.now();
+
+        // Check every minute
+        setInterval(() => this.checkBreakReminder(), 60 * 1000);
+    },
+
+    checkBreakReminder() {
+        if (!this.breakRemindersEnabled) return;
+
+        const timeSinceLastReminder = Date.now() - this.lastBreakReminder;
+
+        if (timeSinceLastReminder >= this.breakReminderInterval) {
+            this.showBreakReminder();
+        }
+    },
+
+    showBreakReminder() {
+        if (!this.elements.breakReminder) return;
+
+        // Update session time display
+        const sessionMinutes = Math.floor((Date.now() - this.sessionStartTime) / (1000 * 60));
+        if (this.elements.sessionTimeDisplay) {
+            if (sessionMinutes < 60) {
+                this.elements.sessionTimeDisplay.textContent = sessionMinutes + ' minutes';
+            } else {
+                const hours = Math.floor(sessionMinutes / 60);
+                const mins = sessionMinutes % 60;
+                this.elements.sessionTimeDisplay.textContent = hours + ' hour' + (hours > 1 ? 's' : '') + (mins > 0 ? ' ' + mins + ' min' : '');
+            }
+        }
+
+        this.elements.breakReminder.classList.remove('hidden');
+    },
+
+    dismissBreakReminder() {
+        if (this.elements.breakReminder) {
+            this.elements.breakReminder.classList.add('hidden');
+        }
+        this.lastBreakReminder = Date.now();
+        // Reset session time on break
+        this.sessionStartTime = Date.now();
+    },
+
+    snoozeBreakReminder() {
+        if (this.elements.breakReminder) {
+            this.elements.breakReminder.classList.add('hidden');
+        }
+        // Snooze for 10 minutes
+        this.lastBreakReminder = Date.now() - this.breakReminderInterval + (10 * 60 * 1000);
     },
 
     // Duplicates detection

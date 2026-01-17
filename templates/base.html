@@ -23,6 +23,30 @@
         </div>
     </header>
 
+    <!-- Info Bar with Date/Time and Balance -->
+    <div class="info-bar">
+        <div class="info-bar-left">
+            <span class="date-display" id="dateDisplay"></span>
+            <span class="time-display" id="timeDisplay"></span>
+        </div>
+        <div class="info-bar-right">
+            <span class="balance-label">Available:</span>
+            <span class="balance-amount" id="balanceDisplay">--</span>
+        </div>
+    </div>
+
+    <!-- Break Reminder Overlay -->
+    <div id="breakReminder" class="break-reminder hidden">
+        <div class="break-reminder-content">
+            <div class="break-icon">&#9749;</div>
+            <h2>Time for a Break!</h2>
+            <p>You've been browsing for a while. How about stretching your legs or getting some water?</p>
+            <p class="session-time">Session time: <span id="sessionTimeDisplay">0 minutes</span></p>
+            <button id="dismissBreak" class="btn btn-primary btn-large">I'll Take a Break</button>
+            <button id="snoozeBreak" class="btn btn-secondary">Remind Me in 10 Minutes</button>
+        </div>
+    </div>
+
     <!-- Caretaker Panel (slides in from right) -->
     <aside id="caretakerPanel" class="caretaker-panel hidden">
         <div class="caretaker-header">
@@ -52,6 +76,25 @@
                     </div>
                 </div>
                 <div class="store-stats" id="storeStats"></div>
+            </div>
+
+            <!-- Balance Display (for Judi) -->
+            <div class="caretaker-section balance-section">
+                <h3>Judi's Available Balance</h3>
+                <p class="section-desc">This shows in the app so Judi knows how much she can spend.</p>
+                <div class="balance-input-row">
+                    <div class="balance-input-group">
+                        <span class="balance-currency">$</span>
+                        <input type="number" id="balanceInput" class="balance-input" placeholder="0.00" min="0" step="0.01">
+                        <button id="saveBalance" class="btn btn-small btn-primary">Update</button>
+                    </div>
+                </div>
+                <div class="break-settings">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="breakRemindersEnabled" checked>
+                        Enable break reminders (every 30 min)
+                    </label>
+                </div>
             </div>
 
             <!-- Budget Tracker -->
