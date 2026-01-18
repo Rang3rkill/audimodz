@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="controls">
+    <div class="list-selector">
+        <label for="listSelect">List:</label>
+        <select id="listSelect" class="list-dropdown">
+            <option value="">All Lists</option>
+        </select>
+        <button id="manageListsBtn" class="btn btn-icon" title="Manage Lists">
+            <span class="icon-gear">&#9881;</span>
+        </button>
+    </div>
+    <div class="category-controls">
+        <button id="manageCategoriesBtn" class="btn btn-secondary btn-small">Manage Categories</button>
+    </div>
+</div>
+
+<nav class="category-tabs" id="categoryTabs">
+    <button class="tab active" data-category="">All</button>
+</nav>
+
+<div class="items-grid" id="itemsGrid">
+    <div class="loading">Loading items...</div>
+</div>
+
+<div id="readyToBuySection" class="ready-to-buy-section hidden">
+    <div id="readyToBuyContent"></div>
+</div>
+
+<!-- Add Item Modal (for testing) -->
+<div id="addItemModal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Add Item</h2>
+            <button class="close-btn" id="closeAddModal">&times;</button>
+        </div>
+        <form id="addItemForm">
+            <div class="form-group">
+                <label for="itemStore">Store</label>
+                <select id="itemStore" required>
+                    <option value="temu">Temu</option>
+                    <option value="amazon">Amazon</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="itemTitle">Title</label>
+                <input type="text" id="itemTitle" required>
+            </div>
+            <div class="form-group">
+                <label for="itemUrl">Product URL</label>
+                <input type="url" id="itemUrl" required>
+            </div>
+            <div class="form-group">
+                <label for="itemProductId">Product ID</label>
+                <input type="text" id="itemProductId" required>
+            </div>
+            <div class="form-group">
+                <label for="itemImage">Image URL</label>
+                <input type="url" id="itemImage">
+            </div>
+            <div class="form-group">
+                <label for="itemPrice">Price</label>
+                <input type="number" id="itemPrice" step="0.01" min="0">
+            </div>
+            <div class="form-group">
+                <label for="itemQuantity">Quantity</label>
+                <input type="number" id="itemQuantity" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label for="itemCategory">Category</label>
+                <select id="itemCategory"></select>
+            </div>
+            <div class="form-group">
+                <label for="itemList">List</label>
+                <select id="itemList"></select>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Item</button>
+        </form>
+    </div>
+</div>
+
+<button id="addItemBtn" class="fab" title="Add Item">+</button>
+
+<!-- Manage Categories Modal -->
+<div id="manageCategoriesModal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Manage Categories</h2>
+            <button class="close-btn" data-close="manageCategoriesModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="add-form">
+                <input type="text" id="newCategoryName" placeholder="New category name...">
+                <button id="addCategoryBtn" class="btn btn-primary">Add</button>
+            </div>
+            <div class="sortable-list" id="categoriesList"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Lists Modal -->
+<div id="manageListsModal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Manage Lists</h2>
+            <button class="close-btn" data-close="manageListsModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="add-form">
+                <input type="text" id="newListName" placeholder="New list name...">
+                <button id="addListBtn" class="btn btn-primary">Add</button>
+            </div>
+            <div class="sortable-list" id="listsList"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Item Modal -->
+<div id="editItemModal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Edit Item</h2>
+            <button class="close-btn" data-close="editItemModal">&times;</button>
+        </div>
+        <form id="editItemForm">
+            <input type="hidden" id="editItemId">
+            <div class="form-group">
+                <label for="editItemCategory">Category</label>
+                <select id="editItemCategory"></select>
+            </div>
+            <div class="form-group">
+                <label for="editItemList">List</label>
+                <select id="editItemList"></select>
+            </div>
+            <div class="form-group">
+                <label for="editItemQuantity">Quantity</label>
+                <input type="number" id="editItemQuantity" value="1" min="1">
+            </div>
+            <div class="form-group">
+                <label for="editItemNotes">Notes (for caretaker)</label>
+                <textarea id="editItemNotes" placeholder="Add notes about this item..."></textarea>
+            </div>
+            <div class="form-row">
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+                <button type="button" id="deleteItemBtn" class="btn btn-danger">Delete Item</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Judi's Wishlist</h1>
+
+    <div id="status" class="status"></div>
+
+    <div id="unsupported" class="message hidden">
+      <p>This site is not supported.</p>
+      <p class="hint">Open a Temu or Amazon cart page to import items.</p>
+    </div>
+
+    <div id="supported" class="hidden">
+      <div class="store-info">
+        <span id="storeBadge" class="store-badge"></span>
+        <span id="storeName"></span>
+      </div>
+
+      <div class="list-selector">
+        <label for="listSelect">Add to list:</label>
+        <select id="listSelect">
+          <option value="1">Main List</option>
+        </select>
+      </div>
+
+      <button id="importBtn" class="btn btn-primary">
+        Import Cart Items
+      </button>
+
+      <div id="result" class="result hidden"></div>
+    </div>
+
+    <div class="footer">
+      <a href="http://localhost:5000" target="_blank">Open Wishlist</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

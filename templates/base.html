@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Judi's Wishlist</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header class="header">
+        <h1 class="header-title">Judi's Wishlist</h1>
+        <div class="search-container">
+            <input type="text" id="searchInput" class="search-input" placeholder="Search items...">
+            <button id="clearSearch" class="clear-search-btn hidden">&times;</button>
+        </div>
+        <div class="header-actions">
+            <button id="viewToggle" class="btn btn-icon" title="Toggle view">
+                <span id="viewIcon">&#9638;</span>
+            </button>
+            <button id="caretakerToggle" class="btn btn-secondary btn-small">
+                <span class="caretaker-icon">&#9881;</span> Caretaker
+            </button>
+        </div>
+    </header>
+
+    <!-- Info Bar with Date/Time and Balance -->
+    <div class="info-bar">
+        <div class="info-bar-left">
+            <span class="date-display" id="dateDisplay"></span>
+            <span class="time-display" id="timeDisplay"></span>
+        </div>
+        <div class="info-bar-right">
+            <span class="balance-label">Available:</span>
+            <span class="balance-amount" id="balanceDisplay">--</span>
+        </div>
+    </div>
+
+    <!-- Break Reminder Overlay -->
+    <div id="breakReminder" class="break-reminder hidden">
+        <div class="break-reminder-content">
+            <div class="break-icon">&#9749;</div>
+            <h2>Time for a Break!</h2>
+            <p>You've been browsing for a while. How about stretching your legs or getting some water?</p>
+            <p class="session-time">Session time: <span id="sessionTimeDisplay">0 minutes</span></p>
+            <button id="dismissBreak" class="btn btn-primary btn-large">I'll Take a Break</button>
+            <button id="snoozeBreak" class="btn btn-secondary">Remind Me in 10 Minutes</button>
+        </div>
+    </div>
+
+    <!-- Caretaker Panel (slides in from right) -->
+    <aside id="caretakerPanel" class="caretaker-panel hidden">
+        <div class="caretaker-header">
+            <h2>Caretaker Tools</h2>
+            <button id="closeCaretaker" class="close-btn">&times;</button>
+        </div>
+        <div class="caretaker-content">
+            <!-- Dashboard Stats -->
+            <div class="dashboard-section">
+                <h3>Dashboard</h3>
+                <div class="stats-grid" id="statsGrid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalItems">0</div>
+                        <div class="stat-label">Total Items</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalValue">$0</div>
+                        <div class="stat-label">Total Value</div>
+                    </div>
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="statReadyToBuy">0</div>
+                        <div class="stat-label">Ready to Buy</div>
+                    </div>
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="statReadyValue">$0</div>
+                        <div class="stat-label">Cart Value</div>
+                    </div>
+                </div>
+                <div class="store-stats" id="storeStats"></div>
+            </div>
+
+            <!-- Balance Display (for Judi) -->
+            <div class="caretaker-section balance-section">
+                <h3>Judi's Available Balance</h3>
+                <p class="section-desc">This shows in the app so Judi knows how much she can spend.</p>
+                <div class="balance-input-row">
+                    <div class="balance-input-group">
+                        <span class="balance-currency">$</span>
+                        <input type="number" id="balanceInput" class="balance-input" placeholder="0.00" min="0" step="0.01">
+                        <button id="saveBalance" class="btn btn-small btn-primary">Update</button>
+                    </div>
+                </div>
+                <div class="break-settings">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="breakRemindersEnabled" checked>
+                        Enable break reminders (every 30 min)
+                    </label>
+                </div>
+            </div>
+
+            <!-- Budget Tracker -->
+            <div class="caretaker-section budget-section">
+                <h3>Budget Tracker</h3>
+                <div class="budget-input-row">
+                    <label for="budgetInput">Monthly Budget:</label>
+                    <div class="budget-input-group">
+                        <span class="budget-currency">$</span>
+                        <input type="number" id="budgetInput" class="budget-input" placeholder="0" min="0" step="10">
+                        <button id="saveBudget" class="btn btn-small">Set</button>
+                    </div>
+                </div>
+                <div class="budget-display" id="budgetDisplay">
+                    <div class="budget-bar-container">
+                        <div class="budget-bar" id="budgetBar"></div>
+                    </div>
+                    <div class="budget-info">
+                        <span id="budgetSpent">$0</span> of <span id="budgetTotal">$0</span>
+                        <span id="budgetRemaining" class="budget-remaining"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="caretaker-section">
+                <h3>Quick Actions</h3>
+                <div class="action-buttons">
+                    <button id="refreshPrices" class="btn btn-secondary btn-block">
+                        <span>&#8635;</span> Refresh All Prices
+                    </button>
+                    <button id="manageCategoriesBtn2" class="btn btn-secondary btn-block">
+                        <span>&#9776;</span> Manage Categories
+                    </button>
+                    <button id="manageListsBtn2" class="btn btn-secondary btn-block">
+                        <span>&#9776;</span> Manage Lists
+                    </button>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="caretaker-section">
+                <h3>Activity</h3>
+                <div class="activity-info">
+                    <div class="activity-row">
+                        <span>New this week:</span>
+                        <span id="statRecentlyAdded">0 items</span>
+                    </div>
+                    <div class="activity-row">
+                        <span>Favorites:</span>
+                        <span id="statFavorites">0 items</span>
+                    </div>
+                    <div class="activity-row">
+                        <span>Oldest item:</span>
+                        <span id="statOldestItem">-</span>
+                    </div>
+                    <div class="activity-row">
+                        <span>Price drops:</span>
+                        <span id="statPriceDrops">0 items</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Potential Duplicates -->
+            <div class="caretaker-section duplicates-section">
+                <h3>
+                    Potential Duplicates
+                    <span class="duplicate-count" id="duplicateCount"></span>
+                </h3>
+                <div id="duplicatesList" class="duplicates-list">
+                    <p class="duplicates-loading">Checking for duplicates...</p>
+                </div>
+            </div>
+
+            <!-- Tips -->
+            <div class="caretaker-section tips-section">
+                <h3>Tips for Judi</h3>
+                <ul class="tips-list">
+                    <li>Tap the <strong>heart</strong> to mark favorites</li>
+                    <li>Tap the <strong>checkbox</strong> to add to cart</li>
+                    <li><strong>Drag items</strong> to reorder them</li>
+                    <li>Use <strong>category tabs</strong> to filter</li>
+                </ul>
+            </div>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
