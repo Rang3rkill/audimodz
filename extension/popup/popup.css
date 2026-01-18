@@ -22,6 +22,56 @@ h1 {
   text-align: center;
 }
 
+/* Method selector tabs */
+.method-selector {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.method-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.method-btn:hover {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.method-btn.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.method-icon {
+  font-size: 20px;
+}
+
+.method-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
+}
+
+.method-btn.active .method-label {
+  color: #2563eb;
+}
+
+/* Import sections */
+.import-section {
+  min-height: 100px;
+}
+
 .status {
   text-align: center;
   padding: 8px;
