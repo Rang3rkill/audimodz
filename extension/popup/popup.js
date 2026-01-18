@@ -536,17 +536,35 @@ async function scrapeTemuAllTabs() {
       const tabName = tab.textContent?.trim() || `Tab ${i + 1}`;
       console.log(`[Judi\'s Wishlist] Processing tab ${i + 1}/${tabsToProcess.length}: ${tabName}`);
 
-      // Click the tab
-      tab.click();
+      // Click the tab - try multiple approaches
+      // First scroll the tab into view
+      tab.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await new Promise(r => setTimeout(r, 300));
 
-      // Wait for content to load
-      await new Promise(r => setTimeout(r, 1500));
+      // Try clicking the tab itself, or find a clickable child
+      const clickTarget = tab.querySelector('a, button, span') || tab;
+      clickTarget.click();
+
+      // Also try dispatching a proper click event
+      const clickEvent = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      });
+      tab.dispatchEvent(clickEvent);
+
+      // Wait longer for content to load after tab click
+      await new Promise(r => setTimeout(r, 2500));
+
+      // Scroll to top first
+      window.scrollTo(0, 0);
+      await new Promise(r => setTimeout(r, 500));
 
       // Scroll through this tab's items
       await scrollCurrentTab();
 
       // Wait a bit more for items to render
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
 
       // Scrape items
       const items = scrapeCurrentItems();
