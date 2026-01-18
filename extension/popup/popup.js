@@ -118,14 +118,17 @@ async function importCart() {
     console.log('[Judi\'s Wishlist Popup] Tab ID:', currentTabId);
 
     // First, scroll through the page to load all lazy-loaded items
-    elements.importBtn.textContent = 'Loading all items...';
+    // This does multiple passes to catch virtualized scrolling
+    elements.importBtn.textContent = 'Scrolling (pass 1 of 3)...';
+
     await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
       func: scrollToLoadAllItems,
     });
 
-    // Small delay to let items render
-    await new Promise(r => setTimeout(r, 1000));
+    // Extra delay to let all items render after scrolling
+    elements.importBtn.textContent = 'Waiting for items to load...';
+    await new Promise(r => setTimeout(r, 2000));
 
     elements.importBtn.textContent = 'Scraping items...';
 
@@ -206,9 +209,13 @@ function showResult(message, success, data = null, scrapeStats = null) {
     // Show count validation
     if (scrapeStats.expectedCount) {
       if (scrapeStats.hasCountMismatch) {
+        const missing = scrapeStats.expectedCount - scrapeStats.total;
         html += `
           <div class="stat-warning">
-            &#9888; Found ${scrapeStats.total} items but cart shows ${scrapeStats.expectedCount}
+            &#9888; Found ${scrapeStats.total} of ${scrapeStats.expectedCount} items (${missing} missing)
+          </div>
+          <div class="stat-tip">
+            Tip: For large carts, try importing each section separately using the filter tabs (Local warehouse, Ships from Temu, etc.)
           </div>
         `;
         elements.result.classList.remove('success');
@@ -243,29 +250,39 @@ function scrollToLoadAllItems() {
   return new Promise((resolve) => {
     console.log('[Judi\'s Wishlist] Starting auto-scroll to load all items...');
 
-    const scrollStep = 800; // pixels per scroll
-    const scrollDelay = 300; // ms between scrolls
+    const scrollStep = 400; // Smaller steps for better loading
+    const scrollDelay = 500; // Longer delay to let items render
     let lastHeight = 0;
     let sameHeightCount = 0;
     let scrollCount = 0;
-    const maxScrolls = 100; // Safety limit
+    const maxScrolls = 200; // Higher limit for large carts
+    let passes = 0;
+    const maxPasses = 3; // Do multiple scroll passes
 
     function doScroll() {
       const currentHeight = document.documentElement.scrollHeight;
       const currentPosition = window.scrollY + window.innerHeight;
 
-      console.log(`[Judi\'s Wishlist] Scroll ${scrollCount}: pos=${Math.round(currentPosition)}, height=${currentHeight}`);
-
-      // Check if we've reached the bottom or nothing new is loading
-      if (currentPosition >= currentHeight - 100) {
+      // Check if we've reached the bottom
+      if (currentPosition >= currentHeight - 50) {
         if (currentHeight === lastHeight) {
           sameHeightCount++;
-          if (sameHeightCount >= 3) {
-            console.log('[Judi\'s Wishlist] Reached bottom, no more items loading');
-            // Scroll back to top
-            window.scrollTo(0, 0);
-            resolve();
-            return;
+          if (sameHeightCount >= 5) {
+            passes++;
+            console.log(`[Judi\'s Wishlist] Completed pass ${passes}/${maxPasses}`);
+
+            if (passes < maxPasses) {
+              // Go back to top and scroll again
+              sameHeightCount = 0;
+              window.scrollTo(0, 0);
+              setTimeout(doScroll, 1000); // Wait 1 second before next pass
+              return;
+            } else {
+              console.log('[Judi\'s Wishlist] All passes complete');
+              window.scrollTo(0, 0);
+              resolve();
+              return;
+            }
           }
         } else {
           sameHeightCount = 0;
@@ -280,6 +297,11 @@ function scrollToLoadAllItems() {
         window.scrollTo(0, 0);
         resolve();
         return;
+      }
+
+      // Log progress every 20 scrolls
+      if (scrollCount % 20 === 0) {
+        console.log(`[Judi\'s Wishlist] Scroll ${scrollCount}, position: ${Math.round(currentPosition)}/${currentHeight}`);
       }
 
       // Scroll down
