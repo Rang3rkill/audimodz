@@ -622,6 +622,44 @@ form {
     padding: 24px;
 }
 
+/* Small modal variant */
+.modal-small {
+    max-width: 400px;
+}
+
+/* Warning header for delete confirmations */
+.modal-header-warning {
+    background: #fff3cd;
+    border-bottom-color: #ffc107;
+}
+
+.modal-header-warning h2 {
+    color: #856404;
+}
+
+/* Confirmation modal styles */
+.confirm-message {
+    font-size: 18px;
+    margin-bottom: 12px;
+    color: var(--text-primary);
+}
+
+.confirm-warning {
+    font-size: 14px;
+    color: #dc3545;
+    font-weight: 500;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding: 16px 24px;
+    border-top: 2px solid var(--border-color);
+    background: #f8f9fa;
+    border-radius: 0 0 16px 16px;
+}
+
 /* Add form in modals */
 .add-form {
     display: flex;

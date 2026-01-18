@@ -107,6 +107,11 @@ const App = {
             editItemQuantity: document.getElementById('editItemQuantity'),
             editItemNotes: document.getElementById('editItemNotes'),
             deleteItemBtn: document.getElementById('deleteItemBtn'),
+            // Confirm delete modal
+            confirmDeleteModal: document.getElementById('confirmDeleteModal'),
+            confirmDeleteMessage: document.getElementById('confirmDeleteMessage'),
+            confirmDeleteCancel: document.getElementById('confirmDeleteCancel'),
+            confirmDeleteConfirm: document.getElementById('confirmDeleteConfirm'),
             // Caretaker panel
             caretakerToggle: document.getElementById('caretakerToggle'),
             caretakerPanel: document.getElementById('caretakerPanel'),
@@ -794,6 +799,57 @@ const App = {
         }, 2000);
     },
 
+    // Custom confirmation dialog
+    showConfirmDialog(message) {
+        return new Promise((resolve) => {
+            this.elements.confirmDeleteMessage.textContent = message;
+            this.elements.confirmDeleteModal.classList.remove('hidden');
+
+            // Handler functions
+            const handleConfirm = () => {
+                cleanup();
+                resolve(true);
+            };
+
+            const handleCancel = () => {
+                cleanup();
+                resolve(false);
+            };
+
+            const handleClickOutside = (e) => {
+                if (e.target === this.elements.confirmDeleteModal) {
+                    handleCancel();
+                }
+            };
+
+            const handleEscape = (e) => {
+                if (e.key === 'Escape') {
+                    handleCancel();
+                }
+            };
+
+            const cleanup = () => {
+                this.elements.confirmDeleteModal.classList.add('hidden');
+                this.elements.confirmDeleteConfirm.removeEventListener('click', handleConfirm);
+                this.elements.confirmDeleteCancel.removeEventListener('click', handleCancel);
+                this.elements.confirmDeleteModal.removeEventListener('click', handleClickOutside);
+                document.removeEventListener('keydown', handleEscape);
+            };
+
+            // Add event listeners
+            this.elements.confirmDeleteConfirm.addEventListener('click', handleConfirm);
+            this.elements.confirmDeleteCancel.addEventListener('click', handleCancel);
+            this.elements.confirmDeleteModal.addEventListener('click', handleClickOutside);
+            document.addEventListener('keydown', handleEscape);
+
+            // Also handle close button
+            const closeBtn = this.elements.confirmDeleteModal.querySelector('.close-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', handleCancel, { once: true });
+            }
+        });
+    },
+
     // Format relative time
     formatRelativeTime(dateString) {
         if (!dateString) return '';
@@ -802,6 +858,8 @@ const App = {
         const diffMs = now - date;
         const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
+        // Handle negative values (future dates due to timezone issues)
+        if (diffDays < 0) return 'Today';
         if (diffDays === 0) return 'Today';
         if (diffDays === 1) return 'Yesterday';
         if (diffDays < 7) return diffDays + ' days ago';
@@ -1507,7 +1565,10 @@ const App = {
         const cat = this.categories.find(c => c.id === id);
         if (!cat || cat.is_default) return;
 
-        if (!confirm(`Delete "${cat.name}"? Items will be moved to Unsorted.`)) return;
+        const confirmed = await this.showConfirmDialog(
+            `Delete the category "${cat.name}"?\n\nAll items in this category will be moved to Unsorted.`
+        );
+        if (!confirmed) return;
 
         try {
             await this.api(`/api/categories/${id}`, {
@@ -1518,9 +1579,10 @@ const App = {
             this.renderCategoriesList();
             this.renderCategoryTabs();
             this.renderFormSelects();
+            this.showToast(`Category "${cat.name}" deleted`);
             this.loadItems();
         } catch (error) {
-            alert('Error deleting category');
+            this.showToast('Error deleting category', 'error');
         }
     },
 
@@ -1658,7 +1720,10 @@ const App = {
         const list = this.lists.find(l => l.id === id);
         if (!list || list.is_default) return;
 
-        if (!confirm(`Delete "${list.name}"? Items will be moved to Main List.`)) return;
+        const confirmed = await this.showConfirmDialog(
+            `Delete the list "${list.name}"?\n\nAll items in this list will be moved to the Main List.`
+        );
+        if (!confirmed) return;
 
         try {
             await this.api(`/api/lists/${id}`, {
@@ -1669,6 +1734,7 @@ const App = {
             this.renderListsList();
             this.renderListDropdown();
             this.renderFormSelects();
+            this.showToast(`List "${list.name}" deleted`);
 
             // Reset filter if deleted list was selected
             if (this.currentList === id) {
@@ -1676,7 +1742,7 @@ const App = {
             }
             this.loadItems();
         } catch (error) {
-            alert('Error deleting list');
+            this.showToast('Error deleting list', 'error');
         }
     },
 
