@@ -422,45 +422,81 @@ async function scrapeTemuAllTabs() {
     return items;
   }
 
-  // Find filter tabs
+  // Find filter tabs - try multiple selectors
   const tabSelectors = [
     'button[class*="tab"]',
     'div[class*="tab"]',
     'span[class*="tab"]',
     '[role="tab"]',
+    // Additional selectors for Temu's updated UI
+    '[class*="Tab"]',
+    '[class*="filter"]',
+    '[class*="Filter"]',
+    'button[class*="select"]',
+    'div[class*="category"]',
   ];
 
   let tabs = [];
   for (const sel of tabSelectors) {
-    const found = document.querySelectorAll(sel);
-    // Look for tabs that have counts like "All (540)" or "Local warehouse (439)"
-    const validTabs = Array.from(found).filter(el => {
-      const text = el.textContent || '';
-      return text.match(/\(\d+\)/) && (
-        text.includes('All') ||
-        text.includes('warehouse') ||
-        text.includes('Ships') ||
-        text.includes('Temu')
-      );
-    });
-    if (validTabs.length > tabs.length) {
-      tabs = validTabs;
-    }
+    try {
+      const found = document.querySelectorAll(sel);
+      // Look for tabs that have counts like "All (540)" or "Local warehouse (439)"
+      const validTabs = Array.from(found).filter(el => {
+        const text = el.textContent || '';
+        return text.match(/\(\d+\)/) && (
+          text.includes('All') ||
+          text.includes('warehouse') ||
+          text.includes('Warehouse') ||
+          text.includes('Ships') ||
+          text.includes('Temu') ||
+          text.includes('Local') ||
+          text.includes('Standard')
+        );
+      });
+      if (validTabs.length > tabs.length) {
+        tabs = validTabs;
+      }
+    } catch (e) { /* ignore selector errors */ }
   }
 
   console.log(`[Judi\'s Wishlist] Found ${tabs.length} filter tabs`);
 
   if (tabs.length === 0) {
-    // No tabs found, just scrape current view
-    console.log('[Judi\'s Wishlist] No filter tabs found, scraping current view');
-    await scrollCurrentTab();
-    const items = scrapeCurrentItems();
-    items.forEach(item => {
-      allItems.set(item.product_id, item);
-      if (item.image_url) stats.withImage++;
-      if (item.price) stats.withPrice++;
-      if (item.title && item.title.length >= 5) stats.withTitle++;
-    });
+    // No tabs found - do MULTIPLE scroll passes to catch all lazy-loaded items
+    console.log('[Judi\'s Wishlist] No filter tabs found, doing multiple scroll passes...');
+
+    let lastCount = 0;
+    let passCount = 0;
+    const maxPasses = 5;
+
+    while (passCount < maxPasses) {
+      passCount++;
+      console.log(`[Judi\'s Wishlist] Scroll pass ${passCount}/${maxPasses}...`);
+
+      await scrollCurrentTab();
+      await new Promise(r => setTimeout(r, 1000)); // Wait for items to render
+
+      const items = scrapeCurrentItems();
+      const newCount = allItems.size + items.filter(i => !allItems.has(i.product_id)).length;
+
+      items.forEach(item => {
+        if (!allItems.has(item.product_id)) {
+          allItems.set(item.product_id, item);
+          if (item.image_url) stats.withImage++;
+          if (item.price) stats.withPrice++;
+          if (item.title && item.title.length >= 5) stats.withTitle++;
+        }
+      });
+
+      console.log(`[Judi\'s Wishlist] Pass ${passCount}: Found ${allItems.size} total items`);
+
+      // If we didn't find any new items, we're done
+      if (allItems.size === lastCount) {
+        console.log('[Judi\'s Wishlist] No new items found, stopping');
+        break;
+      }
+      lastCount = allItems.size;
+    }
   } else {
     // ALWAYS process ALL tabs including "All" to catch everything
     // Start with "All" tab first to get the most items, then check other tabs for any missed
