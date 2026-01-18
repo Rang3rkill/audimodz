@@ -1152,10 +1152,15 @@ function scrapeCartItems(store) {
 function isValidShareLink(url) {
   try {
     const parsed = new URL(url);
-    return (
-      (parsed.hostname.includes('temu.com') || parsed.hostname.includes('share.temu.com')) &&
-      (parsed.pathname.includes('share') || parsed.searchParams.has('share_key'))
-    );
+    // Accept share.temu.com short links (e.g., https://share.temu.com/CNdtnUqXKRC)
+    if (parsed.hostname === 'share.temu.com') {
+      return true;
+    }
+    // Accept temu.com links with share in path or share_key param
+    if (parsed.hostname.includes('temu.com')) {
+      return parsed.pathname.includes('share') || parsed.searchParams.has('share_key');
+    }
+    return false;
   } catch {
     return false;
   }
