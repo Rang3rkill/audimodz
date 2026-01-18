@@ -385,14 +385,17 @@ async function scrapeTemuAllTabs() {
       const productId = match[1];
       if (allItems.has(productId)) return; // Already have this item
 
-      // Find container
+      // Find container - walk up to find the cart item wrapper
       let container = link;
-      for (let i = 0; i < 15 && container; i++) {
+      for (let i = 0; i < 20 && container; i++) {
         container = container.parentElement;
         if (!container) break;
-        if (container.querySelector('img[src*="kwcdn"]')) break;
+        // Look for a container that has both image and price elements
+        const hasImg = container.querySelector('img');
+        const hasPrice = container.textContent?.includes('$');
+        if (hasImg && hasPrice) break;
       }
-      container = container || link.parentElement?.parentElement?.parentElement;
+      container = container || link.parentElement?.parentElement?.parentElement?.parentElement;
 
       // Get title
       let title = link.textContent?.trim();
@@ -401,23 +404,72 @@ async function scrapeTemuAllTabs() {
         title = img?.alt || 'Unknown Product';
       }
 
-      // Get image
+      // Get image - try multiple approaches
       let imageUrl = null;
-      const img = container?.querySelector('img[src*="kwcdn"], img[src*="akamaized"]');
-      if (img) {
-        imageUrl = img.src || img.dataset?.src || img.getAttribute('data-src');
+      // Method 1: Direct img with known CDN
+      const imgSelectors = [
+        'img[src*="img.kwcdn.com"]',
+        'img[src*="kwcdn"]',
+        'img[src*="akamaized"]',
+        'img[data-src*="kwcdn"]',
+        'img[data-src*="akamaized"]',
+      ];
+      for (const sel of imgSelectors) {
+        const img = container?.querySelector(sel);
+        if (img) {
+          imageUrl = img.src || img.dataset?.src || img.getAttribute('data-src');
+          if (imageUrl && imageUrl.startsWith('http')) break;
+        }
+      }
+      // Method 2: Any img with src
+      if (!imageUrl) {
+        const anyImg = container?.querySelector('img[src^="http"]');
+        if (anyImg && !anyImg.src.includes('icon') && !anyImg.src.includes('logo')) {
+          imageUrl = anyImg.src;
+        }
       }
 
-      // Get price
+      // Get price - try multiple approaches
       let price = null;
-      const priceText = container?.textContent?.match(/\$(\d+\.?\d*)/);
-      if (priceText) {
-        price = parseFloat(priceText[1]);
+      // Method 1: Look for elements with price-like classes
+      const priceSelectors = [
+        '[class*="price"]',
+        '[class*="Price"]',
+        '[class*="cost"]',
+        '[class*="Cost"]',
+        '[data-testid*="price"]',
+      ];
+      for (const sel of priceSelectors) {
+        const priceEl = container?.querySelector(sel);
+        if (priceEl) {
+          const priceMatch = priceEl.textContent?.match(/\$\s*(\d+\.?\d*)/);
+          if (priceMatch) {
+            price = parseFloat(priceMatch[1]);
+            break;
+          }
+        }
+      }
+      // Method 2: Search entire container for price pattern
+      if (!price && container) {
+        // Look for prices, prefer the "current" price (usually the lower one after discount)
+        const allPrices = container.textContent?.match(/\$\s*(\d+\.?\d*)/g) || [];
+        if (allPrices.length > 0) {
+          // Parse all prices and take the lowest (usually the sale price)
+          const priceValues = allPrices.map(p => parseFloat(p.replace(/\$\s*/, '')));
+          price = Math.min(...priceValues.filter(p => p > 0));
+        }
+      }
+      // Method 3: Check for "LAST DAY" or sale price patterns
+      if (!price && container) {
+        const saleMatch = container.textContent?.match(/LAST DAY\s*\$(\d+\.?\d*)/i);
+        if (saleMatch) {
+          price = parseFloat(saleMatch[1]);
+        }
       }
 
       // Get quantity
       let quantity = 1;
-      const qtyEl = container?.querySelector('input[type="text"], input[value]');
+      const qtyEl = container?.querySelector('input[type="text"], input[value], input[type="number"]');
       if (qtyEl) {
         quantity = parseInt(qtyEl.value) || 1;
       }
