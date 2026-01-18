@@ -759,9 +759,24 @@ form {
     color: var(--text-color);
 }
 
-.sortable-item .btn-icon-small.delete:hover {
+.sortable-item .btn-icon-small.delete:hover:not([disabled]) {
     color: var(--warning-color);
     border-color: var(--warning-color);
+}
+
+/* Disabled delete button styling */
+.sortable-item .btn-icon-small.delete[disabled],
+.sortable-item .btn-icon-small.delete.disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.sortable-item .btn-icon-small.delete[disabled]:hover,
+.sortable-item .btn-icon-small.delete.disabled:hover {
+    background: none;
+    color: var(--text-light);
+    border-color: var(--border-color);
 }
 
 .sortable-item.is-default {

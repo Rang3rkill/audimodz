@@ -131,5 +131,16 @@ def init_db():
         VALUES ('Main List', 0, 1)
     ''')
 
+    # Migration: Fix any lists incorrectly marked as default
+    # Only Main List (id=1) should be the default
+    cursor.execute('''
+        UPDATE lists SET is_default = 0 WHERE id != 1
+    ''')
+
+    # Ensure Main List stays as default
+    cursor.execute('''
+        UPDATE lists SET is_default = 1 WHERE id = 1
+    ''')
+
     conn.commit()
     conn.close()
