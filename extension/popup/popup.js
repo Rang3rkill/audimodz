@@ -319,10 +319,10 @@ async function scrapeTemuAllTabs() {
   // Helper function to scroll through current view
   async function scrollCurrentTab() {
     return new Promise((resolve) => {
-      const scrollStep = 400;
-      const scrollDelay = 400;
+      const scrollStep = 500;
+      const scrollDelay = 350;
       let scrollCount = 0;
-      const maxScrolls = 150;
+      const maxScrolls = 300; // Increased for 500+ item carts
       let lastHeight = 0;
       let sameCount = 0;
 
@@ -333,7 +333,7 @@ async function scrapeTemuAllTabs() {
         if (currentPosition >= currentHeight - 50) {
           if (currentHeight === lastHeight) {
             sameCount++;
-            if (sameCount >= 3) {
+            if (sameCount >= 5) { // Wait longer before giving up
               window.scrollTo(0, 0);
               resolve();
               return;
@@ -462,8 +462,13 @@ async function scrapeTemuAllTabs() {
       if (item.title && item.title.length >= 5) stats.withTitle++;
     });
   } else {
-    // Process each tab (skip "All" if we have specific tabs)
-    const tabsToProcess = tabs.length > 1 ? tabs.filter(t => !t.textContent?.includes('All')) : tabs;
+    // ALWAYS process ALL tabs including "All" to catch everything
+    // Start with "All" tab first to get the most items, then check other tabs for any missed
+    const allTab = tabs.find(t => t.textContent?.includes('All'));
+    const otherTabs = tabs.filter(t => !t.textContent?.includes('All'));
+
+    // Reorder: All tab first, then others
+    const tabsToProcess = allTab ? [allTab, ...otherTabs] : tabs;
 
     for (let i = 0; i < tabsToProcess.length; i++) {
       const tab = tabsToProcess[i];

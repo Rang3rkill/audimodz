@@ -1671,8 +1671,9 @@ const App = {
     renderListsList() {
         let html = '';
         for (const list of this.lists) {
-            const isDefault = list.is_default ? 'is-default' : '';
-            const deleteDisabled = list.is_default ? 'disabled' : '';
+            // Only mark Main List (id=1) as truly protected
+            const isMainList = list.name === 'Main List' || list.id === 1;
+            const isDefault = isMainList ? 'is-default' : '';
 
             html += `
                 <div class="sortable-item ${isDefault}" data-id="${list.id}" draggable="true">
@@ -1680,7 +1681,7 @@ const App = {
                     <span class="item-name">${this.escapeHtml(list.name)}</span>
                     <div class="item-actions">
                         <button class="btn-icon-small rename-btn" data-id="${list.id}" title="Rename">&#9998;</button>
-                        <button class="btn-icon-small delete ${deleteDisabled}" data-id="${list.id}" title="Delete" ${deleteDisabled}>&#10005;</button>
+                        <button class="btn-icon-small delete" data-id="${list.id}" title="Delete">&#10005;</button>
                     </div>
                 </div>
             `;
@@ -1692,15 +1693,19 @@ const App = {
     bindListsListEvents() {
         // Rename buttons
         this.elements.listsList.querySelectorAll('.rename-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 const id = parseInt(btn.dataset.id);
                 this.renameList(id);
             });
         });
 
         // Delete buttons
-        this.elements.listsList.querySelectorAll('.delete:not([disabled])').forEach(btn => {
-            btn.addEventListener('click', () => {
+        this.elements.listsList.querySelectorAll('.delete').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 const id = parseInt(btn.dataset.id);
                 this.deleteList(id);
             });
@@ -1777,7 +1782,7 @@ const App = {
 
     async deleteList(id) {
         const list = this.lists.find(l => l.id === id);
-        if (!list || list.is_default) return;
+        if (!list) return;
 
         const confirmed = await this.showConfirmDialog(
             `Delete the list "${list.name}"?\n\nAll items in this list will be moved to the Main List.`
@@ -1785,9 +1790,17 @@ const App = {
         if (!confirmed) return;
 
         try {
-            await this.api(`/api/lists/${id}`, {
+            const response = await fetch(`/api/lists/${id}`, {
                 method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
             });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                this.showToast(data.error || 'Cannot delete this list', 'error');
+                return;
+            }
 
             this.lists = await this.api('/api/lists');
             this.renderListsList();
