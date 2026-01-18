@@ -117,25 +117,13 @@ async function importCart() {
     console.log('[Judi\'s Wishlist Popup] Starting import for store:', currentStore.key);
     console.log('[Judi\'s Wishlist Popup] Tab ID:', currentTabId);
 
-    // First, scroll through the page to load all lazy-loaded items
-    // This does multiple passes to catch virtualized scrolling
-    elements.importBtn.textContent = 'Scrolling (pass 1 of 3)...';
+    // For Temu, use the multi-tab scraper that clicks through each filter
+    elements.importBtn.textContent = 'Scanning cart tabs...';
 
-    await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      func: scrollToLoadAllItems,
-    });
-
-    // Extra delay to let all items render after scrolling
-    elements.importBtn.textContent = 'Waiting for items to load...';
-    await new Promise(r => setTimeout(r, 2000));
-
-    elements.importBtn.textContent = 'Scraping items...';
-
-    // Execute content script to scrape items
+    // Execute the multi-tab scraper
     const results = await chrome.scripting.executeScript({
       target: { tabId: currentTabId },
-      func: scrapeCartItems,
+      func: currentStore.key === 'temu' ? scrapeTemuAllTabs : scrapeCartItems,
       args: [currentStore.key],
     });
 
@@ -206,6 +194,11 @@ function showResult(message, success, data = null, scrapeStats = null) {
   if (scrapeStats) {
     html += `<div class="scrape-stats">`;
 
+    // Show tabs processed
+    if (scrapeStats.tabsProcessed) {
+      html += `<div class="stat-detail">Processed ${scrapeStats.tabsProcessed} tab(s)</div>`;
+    }
+
     // Show count validation
     if (scrapeStats.expectedCount) {
       if (scrapeStats.hasCountMismatch) {
@@ -214,15 +207,14 @@ function showResult(message, success, data = null, scrapeStats = null) {
           <div class="stat-warning">
             &#9888; Found ${scrapeStats.total} of ${scrapeStats.expectedCount} items (${missing} missing)
           </div>
-          <div class="stat-tip">
-            Tip: For large carts, try importing each section separately using the filter tabs (Local warehouse, Ships from Temu, etc.)
-          </div>
         `;
         elements.result.classList.remove('success');
         elements.result.classList.add('warning');
       } else {
         html += `<div class="stat-ok">&#10003; All ${scrapeStats.total} cart items found</div>`;
       }
+    } else {
+      html += `<div class="stat-ok">&#10003; Found ${scrapeStats.total} items</div>`;
     }
 
     // Show data quality
@@ -314,6 +306,220 @@ function scrollToLoadAllItems() {
     // Start scrolling
     doScroll();
   });
+}
+
+// Multi-tab scraper for Temu - clicks through each filter tab and collects all items
+// This runs in the context of the page
+async function scrapeTemuAllTabs() {
+  const allItems = new Map(); // Use Map to deduplicate by product_id
+  const stats = { total: 0, withImage: 0, withPrice: 0, withTitle: 0, tabsProcessed: 0 };
+
+  console.log('[Judi\'s Wishlist] === MULTI-TAB SCRAPER ===');
+
+  // Helper function to scroll through current view
+  async function scrollCurrentTab() {
+    return new Promise((resolve) => {
+      const scrollStep = 400;
+      const scrollDelay = 400;
+      let scrollCount = 0;
+      const maxScrolls = 150;
+      let lastHeight = 0;
+      let sameCount = 0;
+
+      function doScroll() {
+        const currentHeight = document.documentElement.scrollHeight;
+        const currentPosition = window.scrollY + window.innerHeight;
+
+        if (currentPosition >= currentHeight - 50) {
+          if (currentHeight === lastHeight) {
+            sameCount++;
+            if (sameCount >= 3) {
+              window.scrollTo(0, 0);
+              resolve();
+              return;
+            }
+          } else {
+            sameCount = 0;
+          }
+        }
+
+        lastHeight = currentHeight;
+        scrollCount++;
+
+        if (scrollCount >= maxScrolls) {
+          window.scrollTo(0, 0);
+          resolve();
+          return;
+        }
+
+        window.scrollBy(0, scrollStep);
+        setTimeout(doScroll, scrollDelay);
+      }
+
+      doScroll();
+    });
+  }
+
+  // Helper function to scrape items from current view
+  function scrapeCurrentItems() {
+    const items = [];
+    const productLinks = document.querySelectorAll('a[href*="goods_id="]');
+
+    productLinks.forEach(link => {
+      const match = link.href.match(/goods_id=(\d+)/);
+      if (!match) return;
+
+      const productId = match[1];
+      if (allItems.has(productId)) return; // Already have this item
+
+      // Find container
+      let container = link;
+      for (let i = 0; i < 15 && container; i++) {
+        container = container.parentElement;
+        if (!container) break;
+        if (container.querySelector('img[src*="kwcdn"]')) break;
+      }
+      container = container || link.parentElement?.parentElement?.parentElement;
+
+      // Get title
+      let title = link.textContent?.trim();
+      if (!title || title.length < 5) {
+        const img = container?.querySelector('img');
+        title = img?.alt || 'Unknown Product';
+      }
+
+      // Get image
+      let imageUrl = null;
+      const img = container?.querySelector('img[src*="kwcdn"], img[src*="akamaized"]');
+      if (img) {
+        imageUrl = img.src || img.dataset?.src || img.getAttribute('data-src');
+      }
+
+      // Get price
+      let price = null;
+      const priceText = container?.textContent?.match(/\$(\d+\.?\d*)/);
+      if (priceText) {
+        price = parseFloat(priceText[1]);
+      }
+
+      // Get quantity
+      let quantity = 1;
+      const qtyEl = container?.querySelector('input[type="text"], input[value]');
+      if (qtyEl) {
+        quantity = parseInt(qtyEl.value) || 1;
+      }
+
+      items.push({
+        product_id: productId,
+        product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+        title: title,
+        image_url: imageUrl,
+        price: price,
+        quantity: quantity,
+      });
+    });
+
+    return items;
+  }
+
+  // Find filter tabs
+  const tabSelectors = [
+    'button[class*="tab"]',
+    'div[class*="tab"]',
+    'span[class*="tab"]',
+    '[role="tab"]',
+  ];
+
+  let tabs = [];
+  for (const sel of tabSelectors) {
+    const found = document.querySelectorAll(sel);
+    // Look for tabs that have counts like "All (540)" or "Local warehouse (439)"
+    const validTabs = Array.from(found).filter(el => {
+      const text = el.textContent || '';
+      return text.match(/\(\d+\)/) && (
+        text.includes('All') ||
+        text.includes('warehouse') ||
+        text.includes('Ships') ||
+        text.includes('Temu')
+      );
+    });
+    if (validTabs.length > tabs.length) {
+      tabs = validTabs;
+    }
+  }
+
+  console.log(`[Judi\'s Wishlist] Found ${tabs.length} filter tabs`);
+
+  if (tabs.length === 0) {
+    // No tabs found, just scrape current view
+    console.log('[Judi\'s Wishlist] No filter tabs found, scraping current view');
+    await scrollCurrentTab();
+    const items = scrapeCurrentItems();
+    items.forEach(item => {
+      allItems.set(item.product_id, item);
+      if (item.image_url) stats.withImage++;
+      if (item.price) stats.withPrice++;
+      if (item.title && item.title.length >= 5) stats.withTitle++;
+    });
+  } else {
+    // Process each tab (skip "All" if we have specific tabs)
+    const tabsToProcess = tabs.length > 1 ? tabs.filter(t => !t.textContent?.includes('All')) : tabs;
+
+    for (let i = 0; i < tabsToProcess.length; i++) {
+      const tab = tabsToProcess[i];
+      const tabName = tab.textContent?.trim() || `Tab ${i + 1}`;
+      console.log(`[Judi\'s Wishlist] Processing tab ${i + 1}/${tabsToProcess.length}: ${tabName}`);
+
+      // Click the tab
+      tab.click();
+
+      // Wait for content to load
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Scroll through this tab's items
+      await scrollCurrentTab();
+
+      // Wait a bit more for items to render
+      await new Promise(r => setTimeout(r, 500));
+
+      // Scrape items
+      const items = scrapeCurrentItems();
+      console.log(`[Judi\'s Wishlist] Found ${items.length} items in "${tabName}"`);
+
+      items.forEach(item => {
+        if (!allItems.has(item.product_id)) {
+          allItems.set(item.product_id, item);
+          if (item.image_url) stats.withImage++;
+          if (item.price) stats.withPrice++;
+          if (item.title && item.title.length >= 5) stats.withTitle++;
+        }
+      });
+
+      stats.tabsProcessed++;
+    }
+  }
+
+  // Convert map to array
+  const finalItems = Array.from(allItems.values());
+  stats.total = finalItems.length;
+
+  // Try to get expected count
+  const pageText = document.body.textContent || '';
+  const countMatch = pageText.match(/All\s*\((\d+)\)/i);
+  stats.expectedCount = countMatch ? parseInt(countMatch[1]) : null;
+  stats.hasCountMismatch = stats.expectedCount && stats.total !== stats.expectedCount;
+
+  console.log('[Judi\'s Wishlist] === MULTI-TAB RESULTS ===');
+  console.log(`[Judi\'s Wishlist] Tabs processed: ${stats.tabsProcessed}`);
+  console.log(`[Judi\'s Wishlist] Total unique items: ${stats.total}`);
+  console.log(`[Judi\'s Wishlist] Expected: ${stats.expectedCount || 'unknown'}`);
+  console.log(`[Judi\'s Wishlist] With images: ${stats.withImage} (${Math.round(stats.withImage/stats.total*100)}%)`);
+  console.log(`[Judi\'s Wishlist] With prices: ${stats.withPrice} (${Math.round(stats.withPrice/stats.total*100)}%)`);
+
+  // Attach stats
+  finalItems._stats = stats;
+
+  return finalItems;
 }
 
 // Content script function to scrape cart items
