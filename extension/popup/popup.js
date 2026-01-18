@@ -329,6 +329,108 @@ async function scrapeTemuAllTabs() {
 
   console.log('[Judi\'s Wishlist] === MULTI-TAB SCRAPER ===');
 
+  // === METHOD 1: Try to find cart data in JavaScript/JSON ===
+  console.log('[Judi\'s Wishlist] Attempting to find cart data in page JavaScript...');
+
+  // Look for cart data in common locations
+  const dataLocations = [
+    () => window.__INITIAL_STATE__?.cart?.items,
+    () => window.__INITIAL_STATE__?.cartData?.items,
+    () => window.__NEXT_DATA__?.props?.pageProps?.cart?.items,
+    () => window.__NUXT__?.state?.cart?.items,
+    () => window.cartData?.items,
+    () => window.pageData?.cart?.items,
+  ];
+
+  for (const getter of dataLocations) {
+    try {
+      const items = getter();
+      if (items && Array.isArray(items) && items.length > 0) {
+        console.log(`[Judi\'s Wishlist] Found ${items.length} items in JavaScript data!`);
+        items.forEach(item => {
+          const productId = item.goods_id || item.goodsId || item.product_id || item.id;
+          if (!productId || allItems.has(String(productId))) return;
+
+          allItems.set(String(productId), {
+            product_id: String(productId),
+            product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+            title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
+            image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img,
+            price: item.price || item.sale_price || item.salePrice || item.current_price,
+            quantity: item.quantity || item.qty || 1,
+          });
+          stats.withImage++;
+          stats.withPrice++;
+        });
+
+        if (allItems.size > 0) {
+          console.log(`[Judi\'s Wishlist] Successfully extracted ${allItems.size} items from JS data`);
+          const finalItems = Array.from(allItems.values());
+          stats.total = finalItems.length;
+          stats.withImage = finalItems.filter(i => i.image_url).length;
+          stats.withPrice = finalItems.filter(i => i.price).length;
+          finalItems._stats = stats;
+          return finalItems;
+        }
+      }
+    } catch (e) { /* continue */ }
+  }
+
+  // === METHOD 2: Look for JSON in script tags ===
+  console.log('[Judi\'s Wishlist] Checking script tags for cart data...');
+  const scripts = document.querySelectorAll('script:not([src])');
+  for (const script of scripts) {
+    const text = script.textContent || '';
+    // Look for cart-like JSON structures
+    const cartPatterns = [
+      /"goods_id"\s*:\s*"?(\d+)"?/g,
+      /"goodsId"\s*:\s*"?(\d+)"?/g,
+    ];
+
+    for (const pattern of cartPatterns) {
+      const matches = text.matchAll(pattern);
+      for (const match of matches) {
+        const goodsId = match[1];
+        if (!allItems.has(goodsId)) {
+          // Try to extract more data around this goods_id
+          const contextStart = Math.max(0, match.index - 500);
+          const contextEnd = Math.min(text.length, match.index + 1000);
+          const context = text.slice(contextStart, contextEnd);
+
+          // Extract data from context
+          const titleMatch = context.match(/"(?:goods_name|title|name)"\s*:\s*"([^"]+)"/);
+          const imgMatch = context.match(/"(?:thumb_url|image|img|goods_img)"\s*:\s*"([^"]+)"/);
+          const priceMatch = context.match(/"(?:price|sale_price|salePrice)"\s*:\s*(\d+\.?\d*)/);
+
+          if (titleMatch || imgMatch) {
+            allItems.set(goodsId, {
+              product_id: goodsId,
+              product_url: `https://www.temu.com/goods.html?goods_id=${goodsId}`,
+              title: titleMatch ? titleMatch[1] : 'Unknown Product',
+              image_url: imgMatch ? imgMatch[1].replace(/\\/g, '') : null,
+              price: priceMatch ? parseFloat(priceMatch[1]) : null,
+              quantity: 1,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (allItems.size > 50) {
+    console.log(`[Judi\'s Wishlist] Found ${allItems.size} items from script tags`);
+    const finalItems = Array.from(allItems.values());
+    stats.total = finalItems.length;
+    stats.withImage = finalItems.filter(i => i.image_url).length;
+    stats.withPrice = finalItems.filter(i => i.price).length;
+    finalItems._stats = stats;
+    return finalItems;
+  }
+
+  // === METHOD 3: Fall back to DOM scraping ===
+  console.log('[Judi\'s Wishlist] Falling back to DOM scraping...');
+  allItems.clear(); // Reset for DOM scraping
+
   // Helper function to scroll through current view
   async function scrollCurrentTab() {
     return new Promise((resolve) => {
