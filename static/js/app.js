@@ -144,6 +144,9 @@ const App = {
             // Additional stats
             statOldestItem: document.getElementById('statOldestItem'),
             statPriceDrops: document.getElementById('statPriceDrops'),
+            // Missing data
+            missingCount: document.getElementById('missingCount'),
+            missingDataList: document.getElementById('missingDataList'),
             // Duplicates
             duplicateCount: document.getElementById('duplicateCount'),
             duplicatesList: document.getElementById('duplicatesList'),
@@ -391,11 +394,61 @@ const App = {
         this.renderStats();
         this.renderBudget();
         this.renderBalance();
+        this.renderMissingData();
         this.applyViewMode();
         // Set break reminder checkbox
         if (this.elements.breakRemindersEnabled) {
             this.elements.breakRemindersEnabled.checked = this.breakRemindersEnabled;
         }
+    },
+
+    // Render items missing images in caretaker panel
+    renderMissingData() {
+        if (!this.elements.missingDataList) return;
+
+        // Find items without images
+        const missingItems = this.items.filter(item => !item.image_url);
+
+        // Update count badge
+        if (this.elements.missingCount) {
+            this.elements.missingCount.textContent = missingItems.length > 0 ? `(${missingItems.length})` : '';
+            this.elements.missingCount.classList.toggle('has-missing', missingItems.length > 0);
+        }
+
+        if (missingItems.length === 0) {
+            this.elements.missingDataList.innerHTML = `
+                <p class="no-missing">All items have images!</p>
+            `;
+            return;
+        }
+
+        // Show first 20 items with missing images
+        const itemsToShow = missingItems.slice(0, 20);
+        let html = '';
+
+        for (const item of itemsToShow) {
+            const storeBadge = item.store.charAt(0).toUpperCase() + item.store.slice(1);
+            html += `
+                <div class="missing-item" data-id="${item.id}">
+                    <div class="missing-item-placeholder">?</div>
+                    <div class="missing-item-info">
+                        <div class="missing-item-title">${this.escapeHtml(item.title)}</div>
+                        <div class="missing-item-store">${storeBadge}</div>
+                    </div>
+                    <a href="${item.product_url}" target="_blank" class="missing-item-link" title="View on ${storeBadge}">
+                        View
+                    </a>
+                </div>
+            `;
+        }
+
+        if (missingItems.length > 20) {
+            html += `<p style="text-align: center; color: var(--text-light); font-size: 13px;">
+                ...and ${missingItems.length - 20} more items
+            </p>`;
+        }
+
+        this.elements.missingDataList.innerHTML = html;
     },
 
     // Render stats in caretaker panel
@@ -1049,11 +1102,17 @@ const App = {
             </div>
         `;
 
+        // View on store link
+        const viewLink = item.product_url
+            ? `<a href="${item.product_url}" target="_blank" class="view-link" title="View on ${storeName}">&#128279;</a>`
+            : '';
+
         return `
             <div class="item-card" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
                     ${imageHtml}
                     <button class="favorite-btn ${favoriteActive}" data-id="${item.id}" title="Favorite">${favoriteIcon}</button>
+                    ${viewLink}
                     <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}

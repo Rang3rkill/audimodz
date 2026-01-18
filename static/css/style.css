@@ -811,6 +811,37 @@ form {
     border-color: var(--primary-color);
 }
 
+/* View link on item card */
+.item-card .view-link {
+    position: absolute;
+    top: 8px;
+    right: 44px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    text-decoration: none;
+    color: var(--text-primary);
+}
+
+.item-card:hover .view-link {
+    opacity: 1;
+}
+
+.item-card .view-link:hover {
+    background: #10b981;
+    color: white;
+    border-color: #10b981;
+}
+
 /* Utility classes */
 .hidden {
     display: none !important;
@@ -1509,6 +1540,103 @@ form {
 /* Adjust checkbox size */
 .item-checkbox {
     flex-shrink: 0;
+}
+
+/* ==========================================
+   MISSING DATA SECTION
+   ========================================== */
+
+.missing-data-section h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.missing-count {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-light);
+}
+
+.missing-count.has-missing {
+    background: #fee2e2;
+    color: #991b1b;
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+.missing-info {
+    font-size: 13px;
+    color: var(--text-light);
+    margin-bottom: 12px;
+}
+
+.missing-data-list {
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.missing-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px;
+    background: #fef2f2;
+    border-radius: 8px;
+    margin-bottom: 8px;
+}
+
+.missing-item-placeholder {
+    width: 50px;
+    height: 50px;
+    background: #fecaca;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: #dc2626;
+}
+
+.missing-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.missing-item-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.missing-item-store {
+    font-size: 11px;
+    color: var(--text-light);
+}
+
+.missing-item-link {
+    padding: 6px 10px;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+}
+
+.missing-item-link:hover {
+    background: var(--primary-dark);
+}
+
+.no-missing {
+    color: #059669;
+    font-style: italic;
+    text-align: center;
+    padding: 12px;
 }
 
 /* ==========================================

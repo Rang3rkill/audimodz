@@ -168,7 +168,8 @@ async function importCart() {
     if (!response.ok) throw new Error('Failed to import items');
 
     const data = await response.json();
-    showResult(`Imported ${data.imported} items, ${data.skipped} already existed`, true, data);
+    const scrapeStats = items._stats || null;
+    showResult(`Imported ${data.imported} items, ${data.skipped} already existed`, true, data, scrapeStats);
 
   } catch (error) {
     showResult('Error: ' + error.message, false);
@@ -179,8 +180,8 @@ async function importCart() {
 }
 
 // Show result message
-function showResult(message, success, data = null) {
-  elements.result.classList.remove('hidden', 'success', 'error');
+function showResult(message, success, data = null, scrapeStats = null) {
+  elements.result.classList.remove('hidden', 'success', 'error', 'warning');
   elements.result.classList.add(success ? 'success' : 'error');
 
   let html = `<div>${message}</div>`;
@@ -196,6 +197,41 @@ function showResult(message, success, data = null) {
         </div>
       </div>
     `;
+  }
+
+  // Show scrape stats if available
+  if (scrapeStats) {
+    html += `<div class="scrape-stats">`;
+
+    // Show count validation
+    if (scrapeStats.expectedCount) {
+      if (scrapeStats.hasCountMismatch) {
+        html += `
+          <div class="stat-warning">
+            &#9888; Found ${scrapeStats.total} items but cart shows ${scrapeStats.expectedCount}
+          </div>
+        `;
+        elements.result.classList.remove('success');
+        elements.result.classList.add('warning');
+      } else {
+        html += `<div class="stat-ok">&#10003; All ${scrapeStats.total} cart items found</div>`;
+      }
+    }
+
+    // Show data quality
+    const imgPercent = Math.round((scrapeStats.withImage / scrapeStats.total) * 100);
+    const pricePercent = Math.round((scrapeStats.withPrice / scrapeStats.total) * 100);
+
+    if (imgPercent < 100 || pricePercent < 100) {
+      html += `
+        <div class="stat-detail">
+          Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) |
+          Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)
+        </div>
+      `;
+    }
+
+    html += `</div>`;
   }
 
   elements.result.innerHTML = html;
@@ -268,129 +304,242 @@ function scrapeCartItems(store) {
   console.log('[Judi\'s Wishlist Scraper] Page title:', document.title);
 
   if (store === 'temu') {
-    // Temu cart scraping
-    console.log('[Judi\'s Wishlist Scraper] === TEMU CART SCRAPING ===');
+    // Temu cart scraping - NEW APPROACH: Find items by images first
+    console.log('[Judi\'s Wishlist Scraper] === TEMU CART SCRAPING (v2) ===');
 
-    // Try multiple selectors for product links
-    const selectors = [
-      'a[href*="goods_id="]',
-      'a[href*="/goods.html"]',
-      'a[href*="product"]',
-    ];
+    // Collect ALL images from the page that look like product images
+    const allImages = document.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"]');
+    console.log(`[Judi\'s Wishlist Scraper] Found ${allImages.length} potential product images`);
 
-    let productLinks = [];
-    for (const sel of selectors) {
-      const links = document.querySelectorAll(sel);
-      console.log(`[Judi\'s Wishlist Scraper] Selector "${sel}" found ${links.length} links`);
-      if (links.length > productLinks.length) {
-        productLinks = links;
+    // Build a map of goods_id -> image URL
+    const imageMap = new Map();
+
+    // Also collect images by finding them near product links
+    const productLinks = document.querySelectorAll('a[href*="goods_id="]');
+    console.log(`[Judi\'s Wishlist Scraper] Found ${productLinks.length} product links`);
+
+    // For each product link, search nearby for images
+    productLinks.forEach(link => {
+      const match = link.href.match(/goods_id=(\d+)/);
+      if (!match) return;
+      const goodsId = match[1];
+
+      // Search in ancestors for images
+      let el = link;
+      for (let i = 0; i < 15 && el; i++) {
+        el = el.parentElement;
+        if (!el) break;
+
+        // Look for any image in this container
+        const imgs = el.querySelectorAll('img');
+        for (const img of imgs) {
+          const src = img.src || img.dataset?.src || img.getAttribute('data-src');
+          if (src && (src.includes('kwcdn') || src.includes('akamaized') || src.includes('product'))) {
+            // Found a product image near this link
+            if (!imageMap.has(goodsId) || src.includes('product')) {
+              imageMap.set(goodsId, src);
+            }
+            break;
+          }
+        }
+        if (imageMap.has(goodsId)) break;
       }
-    }
+    });
 
-    console.log('[Judi\'s Wishlist Scraper] Using', productLinks.length, 'product links');
+    console.log(`[Judi\'s Wishlist Scraper] Built image map with ${imageMap.size} entries`);
 
-    // Also log what we can find with various cart-related selectors
-    const debugSelectors = {
-      'div with cart class': 'div[class*="cart"]',
-      'div with Cart class': 'div[class*="Cart"]',
-      'div with item class': 'div[class*="item"]',
-      'div with product class': 'div[class*="product"]',
-      'images from kwcdn': 'img[src*="kwcdn"]',
-      'all links': 'a',
-      'checkboxes': 'input[type="checkbox"]',
-    };
-
-    for (const [name, sel] of Object.entries(debugSelectors)) {
-      const els = document.querySelectorAll(sel);
-      console.log(`[Judi\'s Wishlist Scraper] DEBUG: ${name} = ${els.length}`);
-    }
-
+    // Now process each unique product
     const seen = new Set();
-    let skippedDuplicate = 0;
-    let skippedNoId = 0;
+    let stats = { total: 0, withImage: 0, withPrice: 0, withTitle: 0 };
 
     productLinks.forEach((link, index) => {
-      // Extract goods_id
       const match = link.href.match(/goods_id=(\d+)/);
-      if (!match) {
-        if (index < 5) console.log(`[Judi\'s Wishlist Scraper] Link ${index}: No goods_id in`, link.href.substring(0, 80));
-        skippedNoId++;
-        return;
-      }
+      if (!match) return;
 
       const productId = match[1];
-      if (seen.has(productId)) {
-        skippedDuplicate++;
-        return;
-      }
+      if (seen.has(productId)) return;
       seen.add(productId);
+      stats.total++;
 
-      // Find the cart item container (traverse up)
-      let container = link.parentElement;
-      let depth = 0;
-      while (container && depth < 10) {
-        // Look for a container that has an image
-        if (container.querySelector('img[src*="kwcdn"]')) {
-          break;
-        }
+      // Find the best container by walking up
+      let container = link;
+      let bestContainer = null;
+      for (let i = 0; i < 15 && container; i++) {
         container = container.parentElement;
-        depth++;
+        if (!container) break;
+
+        // A good container has: image + price text or quantity input
+        const hasImage = container.querySelector('img[src*="kwcdn"], img[src*="akamaized"]');
+        const hasPrice = container.textContent?.includes('$');
+        const hasQty = container.querySelector('input');
+
+        if (hasImage || hasPrice || hasQty) {
+          bestContainer = container;
+          // Keep going to find a bigger container with more info
+          if (hasImage && hasPrice) break;
+        }
       }
 
-      if (!container) {
-        console.log(`[Judi\'s Wishlist Scraper] Product ${productId}: No container found`);
-        container = link.parentElement?.parentElement?.parentElement;
-      }
+      container = bestContainer || link.parentElement?.parentElement?.parentElement;
 
-      // Get title from link text or image alt
-      let title = link.textContent?.trim();
+      // === GET TITLE ===
+      let title = null;
+
+      // Method 1: Link text
       if (!title || title.length < 5) {
-        const img = container?.querySelector('img[src*="kwcdn"]');
-        title = img?.alt || 'Unknown Product';
+        title = link.textContent?.trim();
       }
 
-      // Get image - try multiple selectors
-      let imageUrl = null;
-      const imgSelectors = [
-        'img[src*="img.kwcdn.com/product"]',
-        'img[src*="kwcdn"]',
-        'img[src*="akamaized"]',
-        'img',
-      ];
-      for (const imgSel of imgSelectors) {
-        const img = container?.querySelector(imgSel);
-        if (img?.src && img.src.includes('http')) {
-          imageUrl = img.src;
-          break;
+      // Method 2: Look for title-like text in container
+      if (!title || title.length < 5) {
+        const textNodes = container?.querySelectorAll('span, div, p, a');
+        for (const node of textNodes || []) {
+          const text = node.textContent?.trim();
+          if (text && text.length > 10 && text.length < 300 &&
+              !text.includes('$') && !text.includes('%') &&
+              !text.match(/^\d+$/) && !text.includes('Qty')) {
+            title = text;
+            break;
+          }
         }
       }
 
-      // Get price - try multiple selectors
+      // Method 3: Image alt text
+      if (!title || title.length < 5) {
+        const img = container?.querySelector('img');
+        if (img?.alt && img.alt.length > 5) {
+          title = img.alt;
+        }
+      }
+
+      if (title && title.length >= 5) stats.withTitle++;
+
+      // === GET IMAGE ===
+      let imageUrl = imageMap.get(productId) || null;
+
+      // Fallback: search in container with multiple approaches
+      if (!imageUrl && container) {
+        // Method 1: Direct img elements with various src attributes
+        const imgSelectors = [
+          'img[src*="img.kwcdn.com/product"]',
+          'img[src*="kwcdn"]',
+          'img[src*="akamaized"]',
+          'img[data-src*="kwcdn"]',
+          'img[data-src*="akamaized"]',
+          'img',
+        ];
+        for (const sel of imgSelectors) {
+          const imgs = container.querySelectorAll(sel);
+          for (const img of imgs) {
+            // Check multiple possible sources for lazy-loaded images
+            const src = img.src || img.dataset?.src || img.getAttribute('data-src') ||
+                       img.getAttribute('data-lazy-src') || img.getAttribute('data-original');
+            if (src && src.startsWith('http') && !src.includes('icon') && !src.includes('logo') &&
+                !src.includes('checkbox') && !src.includes('avatar')) {
+              imageUrl = src;
+              break;
+            }
+          }
+          if (imageUrl) break;
+        }
+
+        // Method 2: Check for background-image in style
+        if (!imageUrl) {
+          const elementsWithBg = container.querySelectorAll('[style*="background"]');
+          for (const el of elementsWithBg) {
+            const style = el.getAttribute('style') || '';
+            const bgMatch = style.match(/url\(['"]?(https?:\/\/[^'")\s]+)['"]?\)/);
+            if (bgMatch && (bgMatch[1].includes('kwcdn') || bgMatch[1].includes('product'))) {
+              imageUrl = bgMatch[1];
+              break;
+            }
+          }
+        }
+
+        // Method 3: Check computed styles for background-image
+        if (!imageUrl) {
+          const allDivs = container.querySelectorAll('div');
+          for (const div of allDivs) {
+            try {
+              const computedStyle = window.getComputedStyle(div);
+              const bgImage = computedStyle.backgroundImage;
+              if (bgImage && bgImage !== 'none') {
+                const urlMatch = bgImage.match(/url\(['"]?(https?:\/\/[^'")\s]+)['"]?\)/);
+                if (urlMatch && (urlMatch[1].includes('kwcdn') || urlMatch[1].includes('product'))) {
+                  imageUrl = urlMatch[1];
+                  break;
+                }
+              }
+            } catch (e) { /* ignore */ }
+          }
+        }
+      }
+
+      if (imageUrl) stats.withImage++;
+
+      // === GET PRICE ===
       let price = null;
-      const priceSelectors = [
-        '[data-through-self="true"]',
-        'span[class*="price"]',
-        'div[class*="price"]',
-        '[class*="Price"]',
-      ];
-      for (const priceSel of priceSelectors) {
-        const priceEl = container?.querySelector(priceSel);
-        if (priceEl) {
-          const priceText = priceEl.textContent?.replace(/[^0-9.]/g, '');
-          price = parseFloat(priceText) || null;
-          if (price) break;
+
+      if (container) {
+        // Method 1: Look for price patterns in text
+        const allText = container.textContent || '';
+        const priceMatches = allText.match(/\$(\d+\.?\d*)/g);
+        if (priceMatches && priceMatches.length > 0) {
+          // Take the first reasonable price (not too high, not zero)
+          for (const pm of priceMatches) {
+            const p = parseFloat(pm.replace('$', ''));
+            if (p > 0 && p < 10000) {
+              price = p;
+              break;
+            }
+          }
+        }
+
+        // Method 2: Specific selectors
+        if (!price) {
+          const priceSelectors = [
+            '[data-through-self="true"]',
+            'span[class*="price"]',
+            'span[class*="Price"]',
+            'div[class*="price"]',
+          ];
+          for (const sel of priceSelectors) {
+            const el = container.querySelector(sel);
+            if (el) {
+              const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+              const p = parseFloat(priceText);
+              if (p > 0 && p < 10000) {
+                price = p;
+                break;
+              }
+            }
+          }
         }
       }
 
-      // Get quantity
+      if (price) stats.withPrice++;
+
+      // === GET QUANTITY ===
       let quantity = 1;
-      const qtyInput = container?.querySelector('input[aria-label], input[type="text"][value]');
-      if (qtyInput) {
-        quantity = parseInt(qtyInput.value) || parseInt(qtyInput.getAttribute('aria-label')) || 1;
+      if (container) {
+        const qtyEl = container.querySelector('input[type="text"], input[aria-label*="uantity"], input[value]');
+        if (qtyEl) {
+          const val = parseInt(qtyEl.value) || parseInt(qtyEl.getAttribute('aria-label')?.match(/\d+/)?.[0]);
+          if (val && val > 0 && val < 1000) {
+            quantity = val;
+          }
+        }
       }
 
-      if (items.length < 3) {
-        console.log(`[Judi\'s Wishlist Scraper] Item ${items.length + 1}: "${title?.substring(0, 40)}" @ $${price}, qty=${quantity}`);
+      // Log first few items for debugging
+      if (items.length < 5) {
+        console.log(`[Judi\'s Wishlist Scraper] Item ${items.length + 1}:`, {
+          id: productId,
+          title: title?.substring(0, 40),
+          hasImage: !!imageUrl,
+          price: price,
+          qty: quantity
+        });
       }
 
       items.push({
@@ -403,11 +552,48 @@ function scrapeCartItems(store) {
       });
     });
 
+    // === DETECT EXPECTED CART COUNT ===
+    let expectedCount = null;
+    // Look for "Checkout (172)" or similar patterns
+    const checkoutBtn = document.querySelector('button[class*="checkout"], button[class*="Checkout"], a[class*="checkout"]');
+    if (checkoutBtn) {
+      const match = checkoutBtn.textContent?.match(/\((\d+)\)/);
+      if (match) {
+        expectedCount = parseInt(match[1]);
+        console.log(`[Judi\'s Wishlist Scraper] Expected cart count from checkout button: ${expectedCount}`);
+      }
+    }
+
+    // Also try to find count in page text
+    if (!expectedCount) {
+      const pageText = document.body.textContent || '';
+      const countMatches = pageText.match(/Checkout\s*\((\d+)\)/i);
+      if (countMatches) {
+        expectedCount = parseInt(countMatches[1]);
+        console.log(`[Judi\'s Wishlist Scraper] Expected cart count from page text: ${expectedCount}`);
+      }
+    }
+
+    // Store stats for reporting
+    stats.expectedCount = expectedCount;
+    stats.hasCountMismatch = expectedCount && stats.total !== expectedCount;
+
     console.log('[Judi\'s Wishlist Scraper] === TEMU RESULTS ===');
-    console.log('[Judi\'s Wishlist Scraper] Items found:', items.length);
-    console.log('[Judi\'s Wishlist Scraper] Skipped (duplicate):', skippedDuplicate);
-    console.log('[Judi\'s Wishlist Scraper] Skipped (no goods_id):', skippedNoId);
-    console.log('[Judi\'s Wishlist Scraper] Unique IDs seen:', seen.size);
+    console.log(`[Judi\'s Wishlist Scraper] Total items found: ${stats.total}`);
+    if (expectedCount) {
+      console.log(`[Judi\'s Wishlist Scraper] Expected count: ${expectedCount}`);
+      if (stats.hasCountMismatch) {
+        console.warn(`[Judi\'s Wishlist Scraper] WARNING: Count mismatch! Found ${stats.total}, expected ${expectedCount}`);
+      } else {
+        console.log(`[Judi\'s Wishlist Scraper] Count matches expected!`);
+      }
+    }
+    console.log(`[Judi\'s Wishlist Scraper] With images: ${stats.withImage} (${Math.round(stats.withImage/stats.total*100)}%)`);
+    console.log(`[Judi\'s Wishlist Scraper] With prices: ${stats.withPrice} (${Math.round(stats.withPrice/stats.total*100)}%)`);
+    console.log(`[Judi\'s Wishlist Scraper] With titles: ${stats.withTitle} (${Math.round(stats.withTitle/stats.total*100)}%)`);
+
+    // Attach stats to items array for reporting
+    items._stats = stats;
 
   } else if (store === 'amazon') {
     // Amazon cart scraping

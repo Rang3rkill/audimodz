@@ -175,6 +175,37 @@ h1 {
   color: #6b7280;
 }
 
+/* Warning state for count mismatch */
+.result.warning {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+}
+
+/* Scrape stats */
+.scrape-stats {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+
+.stat-warning {
+  color: #b45309;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.stat-ok {
+  color: #16a34a;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.stat-detail {
+  color: #6b7280;
+  font-size: 11px;
+}
+
 .footer {
   margin-top: 16px;
   padding-top: 12px;
