@@ -10,15 +10,21 @@ const SUPPORTED_STORES = {
 // DOM elements
 const elements = {
   status: document.getElementById('status'),
-  unsupported: document.getElementById('unsupported'),
-  supported: document.getElementById('supported'),
+  // Method selector
+  methodScanBtn: document.getElementById('methodScanBtn'),
+  methodShareBtn: document.getElementById('methodShareBtn'),
+  // Scan section
+  scanSection: document.getElementById('scanSection'),
+  storeInfo: document.getElementById('storeInfo'),
   storeBadge: document.getElementById('storeBadge'),
   storeName: document.getElementById('storeName'),
+  unsupportedMsg: document.getElementById('unsupportedMsg'),
+  scanControls: document.getElementById('scanControls'),
   listSelect: document.getElementById('listSelect'),
   importBtn: document.getElementById('importBtn'),
   result: document.getElementById('result'),
-  // Share link elements
-  shareImport: document.getElementById('shareImport'),
+  // Share link section
+  shareSection: document.getElementById('shareSection'),
   shareLink: document.getElementById('shareLink'),
   sharePasteBtn: document.getElementById('sharePasteBtn'),
   shareListSelect: document.getElementById('shareListSelect'),
@@ -29,17 +35,19 @@ const elements = {
 // Current state
 let currentStore = null;
 let currentTabId = null;
+let currentMethod = 'scan'; // 'scan' or 'share'
 
 // Initialize popup
 async function init() {
-  showStatus('Checking page...', 'loading');
+  // Load lists first
+  await loadLists();
 
+  // Get current tab info
   try {
-    // Get current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     currentTabId = tab.id;
 
-    // Check if supported store
+    // Check if on a supported store
     const url = new URL(tab.url);
     const hostname = url.hostname.replace('www.', '');
 
@@ -49,20 +57,46 @@ async function init() {
         break;
       }
     }
-
-    if (!currentStore) {
-      showUnsupported();
-      return;
-    }
-
-    // Load lists from API
-    await loadLists();
-
-    // Show supported UI
-    showSupported();
-
   } catch (error) {
-    showStatus('Error: ' + error.message, 'error');
+    console.error('Error checking tab:', error);
+  }
+
+  // Show the scan section by default, update its state
+  updateScanSection();
+  hideStatus();
+}
+
+// Switch between methods
+function switchMethod(method) {
+  currentMethod = method;
+
+  // Update button states
+  elements.methodScanBtn.classList.toggle('active', method === 'scan');
+  elements.methodShareBtn.classList.toggle('active', method === 'share');
+
+  // Show/hide sections
+  elements.scanSection.classList.toggle('hidden', method !== 'scan');
+  elements.shareSection.classList.toggle('hidden', method !== 'share');
+
+  // Hide any previous status
+  hideStatus();
+}
+
+// Update scan section based on current tab
+function updateScanSection() {
+  if (currentStore) {
+    // On a supported store - show controls
+    elements.storeInfo.classList.remove('hidden');
+    elements.storeBadge.textContent = currentStore.key.toUpperCase();
+    elements.storeBadge.className = 'store-badge ' + currentStore.key;
+    elements.storeName.textContent = currentStore.name + ' cart detected';
+    elements.scanControls.classList.remove('hidden');
+    elements.unsupportedMsg.classList.add('hidden');
+  } else {
+    // Not on a supported store
+    elements.storeInfo.classList.add('hidden');
+    elements.scanControls.classList.add('hidden');
+    elements.unsupportedMsg.classList.remove('hidden');
   }
 }
 
@@ -99,25 +133,6 @@ function hideStatus() {
   elements.status.classList.add('hidden');
 }
 
-// Show unsupported message
-function showUnsupported() {
-  hideStatus();
-  elements.unsupported.classList.remove('hidden');
-  elements.supported.classList.add('hidden');
-  elements.shareImport.classList.remove('hidden');
-}
-
-// Show supported store UI
-function showSupported() {
-  hideStatus();
-  elements.unsupported.classList.add('hidden');
-  elements.supported.classList.remove('hidden');
-  elements.shareImport.classList.add('hidden');
-
-  elements.storeBadge.textContent = currentStore.key.toUpperCase();
-  elements.storeBadge.className = 'store-badge ' + currentStore.key;
-  elements.storeName.textContent = currentStore.name + ' detected';
-}
 
 // Import cart items
 async function importCart() {
@@ -1323,6 +1338,11 @@ async function pasteFromClipboard() {
 }
 
 // Event listeners
+// Method switching
+elements.methodScanBtn.addEventListener('click', () => switchMethod('scan'));
+elements.methodShareBtn.addEventListener('click', () => switchMethod('share'));
+
+// Import buttons
 elements.importBtn.addEventListener('click', importCart);
 elements.shareImportBtn.addEventListener('click', importFromShareLink);
 elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
