@@ -5,7 +5,8 @@
   "description": "Import items from Temu and Amazon carts to Judi's Wishlist",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "http://localhost:5000/*",

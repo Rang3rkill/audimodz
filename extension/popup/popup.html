@@ -12,7 +12,24 @@
 
     <div id="unsupported" class="message hidden">
       <p>This site is not supported.</p>
-      <p class="hint">Open a Temu or Amazon cart page to import items.</p>
+      <p class="hint">Open a Temu or Amazon cart page, or paste a share link below.</p>
+    </div>
+
+    <div id="shareImport" class="share-import">
+      <div class="share-input-wrapper">
+        <input type="text" id="shareLink" placeholder="Paste Temu share link here..." class="share-input">
+        <button id="sharePasteBtn" class="btn-paste" title="Paste from clipboard">📋</button>
+      </div>
+      <div class="list-selector">
+        <label for="shareListSelect">Add to list:</label>
+        <select id="shareListSelect">
+          <option value="1">Main List</option>
+        </select>
+      </div>
+      <button id="shareImportBtn" class="btn btn-secondary">
+        Import from Share Link
+      </button>
+      <div id="shareResult" class="result hidden"></div>
     </div>
 
     <div id="supported" class="hidden">

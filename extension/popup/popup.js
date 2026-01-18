@@ -17,6 +17,13 @@ const elements = {
   listSelect: document.getElementById('listSelect'),
   importBtn: document.getElementById('importBtn'),
   result: document.getElementById('result'),
+  // Share link elements
+  shareImport: document.getElementById('shareImport'),
+  shareLink: document.getElementById('shareLink'),
+  sharePasteBtn: document.getElementById('sharePasteBtn'),
+  shareListSelect: document.getElementById('shareListSelect'),
+  shareImportBtn: document.getElementById('shareImportBtn'),
+  shareResult: document.getElementById('shareResult'),
 };
 
 // Current state
@@ -67,9 +74,12 @@ async function loadLists() {
 
     const lists = await response.json();
 
-    elements.listSelect.innerHTML = lists.map(list =>
+    const optionsHtml = lists.map(list =>
       `<option value="${list.id}">${list.name}</option>`
     ).join('');
+
+    elements.listSelect.innerHTML = optionsHtml;
+    elements.shareListSelect.innerHTML = optionsHtml;
 
   } catch (error) {
     console.error('Failed to load lists:', error);
@@ -94,6 +104,7 @@ function showUnsupported() {
   hideStatus();
   elements.unsupported.classList.remove('hidden');
   elements.supported.classList.add('hidden');
+  elements.shareImport.classList.remove('hidden');
 }
 
 // Show supported store UI
@@ -101,6 +112,7 @@ function showSupported() {
   hideStatus();
   elements.unsupported.classList.add('hidden');
   elements.supported.classList.remove('hidden');
+  elements.shareImport.classList.add('hidden');
 
   elements.storeBadge.textContent = currentStore.key.toUpperCase();
   elements.storeBadge.className = 'store-badge ' + currentStore.key;
@@ -1121,8 +1133,206 @@ function scrapeCartItems(store) {
   return items;
 }
 
+// Validate a Temu share link
+function isValidShareLink(url) {
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.hostname.includes('temu.com') || parsed.hostname.includes('share.temu.com')) &&
+      (parsed.pathname.includes('share') || parsed.searchParams.has('share_key'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Import from a Temu share link
+async function importFromShareLink() {
+  const shareUrl = elements.shareLink.value.trim();
+
+  if (!shareUrl) {
+    showShareResult('Please paste a Temu share link', false);
+    return;
+  }
+
+  if (!isValidShareLink(shareUrl)) {
+    showShareResult('Invalid share link. Please paste a valid Temu share link.', false);
+    return;
+  }
+
+  elements.shareImportBtn.disabled = true;
+  elements.shareImportBtn.textContent = 'Opening share link...';
+  elements.shareResult.classList.add('hidden');
+
+  try {
+    console.log('[Judi\'s Wishlist] Opening share link:', shareUrl);
+
+    // Open the share link in a new tab
+    const tab = await chrome.tabs.create({ url: shareUrl, active: false });
+
+    elements.shareImportBtn.textContent = 'Waiting for page to load...';
+
+    // Wait for the tab to finish loading
+    await waitForTabLoad(tab.id);
+
+    // Give extra time for JavaScript to render content
+    await new Promise(r => setTimeout(r, 3000));
+
+    elements.shareImportBtn.textContent = 'Scanning cart items...';
+
+    // Execute the scraper on the share page
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: scrapeTemuAllTabs,
+    });
+
+    const items = results[0]?.result || [];
+    console.log('[Judi\'s Wishlist] Found items from share link:', items.length);
+
+    // Close the tab after scraping
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch (e) {
+      console.log('[Judi\'s Wishlist] Could not close tab:', e);
+    }
+
+    if (items.length === 0) {
+      showShareResult('No items found. The share link may have expired or the cart is empty.', false);
+      return;
+    }
+
+    elements.shareImportBtn.textContent = `Importing ${items.length} items...`;
+
+    // Send to wishlist app
+    const listId = parseInt(elements.shareListSelect.value);
+    const response = await fetch(`${API_BASE}/api/items/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        store: 'temu',
+        items: items,
+        list_id: listId,
+      }),
+    });
+
+    if (!response.ok) throw new Error('Failed to import items');
+
+    const data = await response.json();
+    const scrapeStats = items._stats || null;
+
+    // Build result message
+    let msg = `Imported ${data.imported} new`;
+    if (data.updated > 0) {
+      msg += `, ${data.updated} prices updated`;
+      if (data.price_drops > 0) msg += ` (${data.price_drops} dropped!)`;
+    }
+    if (data.skipped > 0) {
+      msg += `, ${data.skipped} unchanged`;
+    }
+    showShareResult(msg, true, data, scrapeStats);
+
+    // Clear the input on success
+    elements.shareLink.value = '';
+
+  } catch (error) {
+    console.error('[Judi\'s Wishlist] Share import error:', error);
+    showShareResult('Error: ' + error.message, false);
+  } finally {
+    elements.shareImportBtn.disabled = false;
+    elements.shareImportBtn.textContent = 'Import from Share Link';
+  }
+}
+
+// Wait for a tab to finish loading
+function waitForTabLoad(tabId) {
+  return new Promise((resolve, reject) => {
+    let timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error('Page load timeout'));
+    }, 30000); // 30 second timeout
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// Show share result message
+function showShareResult(message, success, data = null, scrapeStats = null) {
+  elements.shareResult.classList.remove('hidden', 'success', 'error', 'warning');
+  elements.shareResult.classList.add(success ? 'success' : 'error');
+
+  let html = `<div>${message}</div>`;
+
+  if (data) {
+    html += `<div class="result-stats">`;
+    html += `<div class="result-stat imported"><span class="count">${data.imported}</span> new</div>`;
+
+    if (data.updated > 0) {
+      html += `<div class="result-stat updated"><span class="count">${data.updated}</span> updated</div>`;
+    }
+
+    if (data.price_drops > 0) {
+      html += `<div class="result-stat price-drop"><span class="count">${data.price_drops}</span> price drops!</div>`;
+    }
+
+    html += `<div class="result-stat skipped"><span class="count">${data.skipped}</span> unchanged</div>`;
+    html += `</div>`;
+  }
+
+  // Show scrape stats if available
+  if (scrapeStats) {
+    html += `<div class="scrape-stats">`;
+    if (scrapeStats.total) {
+      html += `<div class="stat-ok">✓ Found ${scrapeStats.total} items from share link</div>`;
+    }
+
+    const imgPercent = scrapeStats.total ? Math.round((scrapeStats.withImage / scrapeStats.total) * 100) : 0;
+    const pricePercent = scrapeStats.total ? Math.round((scrapeStats.withPrice / scrapeStats.total) * 100) : 0;
+
+    if (imgPercent < 100 || pricePercent < 100) {
+      html += `
+        <div class="stat-detail">
+          Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) |
+          Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)
+        </div>
+      `;
+    }
+    html += `</div>`;
+  }
+
+  elements.shareResult.innerHTML = html;
+}
+
+// Paste from clipboard
+async function pasteFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    elements.shareLink.value = text;
+  } catch (error) {
+    console.error('Failed to paste from clipboard:', error);
+    // Fallback: focus the input so user can paste manually
+    elements.shareLink.focus();
+  }
+}
+
 // Event listeners
 elements.importBtn.addEventListener('click', importCart);
+elements.shareImportBtn.addEventListener('click', importFromShareLink);
+elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
+
+// Allow Enter key to trigger import
+elements.shareLink.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    importFromShareLink();
+  }
+});
 
 // Initialize
 init();
