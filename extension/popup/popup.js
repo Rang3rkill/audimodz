@@ -17,6 +17,13 @@ const elements = {
   listSelect: document.getElementById('listSelect'),
   importBtn: document.getElementById('importBtn'),
   result: document.getElementById('result'),
+  // Share link elements
+  shareImport: document.getElementById('shareImport'),
+  shareLink: document.getElementById('shareLink'),
+  sharePasteBtn: document.getElementById('sharePasteBtn'),
+  shareListSelect: document.getElementById('shareListSelect'),
+  shareImportBtn: document.getElementById('shareImportBtn'),
+  shareResult: document.getElementById('shareResult'),
 };
 
 // Current state
@@ -67,9 +74,12 @@ async function loadLists() {
 
     const lists = await response.json();
 
-    elements.listSelect.innerHTML = lists.map(list =>
+    const optionsHtml = lists.map(list =>
       `<option value="${list.id}">${list.name}</option>`
     ).join('');
+
+    elements.listSelect.innerHTML = optionsHtml;
+    elements.shareListSelect.innerHTML = optionsHtml;
 
   } catch (error) {
     console.error('Failed to load lists:', error);
@@ -94,6 +104,7 @@ function showUnsupported() {
   hideStatus();
   elements.unsupported.classList.remove('hidden');
   elements.supported.classList.add('hidden');
+  elements.shareImport.classList.remove('hidden');
 }
 
 // Show supported store UI
@@ -101,6 +112,7 @@ function showSupported() {
   hideStatus();
   elements.unsupported.classList.add('hidden');
   elements.supported.classList.remove('hidden');
+  elements.shareImport.classList.add('hidden');
 
   elements.storeBadge.textContent = currentStore.key.toUpperCase();
   elements.storeBadge.className = 'store-badge ' + currentStore.key;
@@ -160,7 +172,17 @@ async function importCart() {
 
     const data = await response.json();
     const scrapeStats = items._stats || null;
-    showResult(`Imported ${data.imported} items, ${data.skipped} already existed`, true, data, scrapeStats);
+
+    // Build result message
+    let msg = `Imported ${data.imported} new`;
+    if (data.updated > 0) {
+      msg += `, ${data.updated} prices updated`;
+      if (data.price_drops > 0) msg += ` (${data.price_drops} dropped!)`;
+    }
+    if (data.skipped > 0) {
+      msg += `, ${data.skipped} unchanged`;
+    }
+    showResult(msg, true, data, scrapeStats);
 
   } catch (error) {
     showResult('Error: ' + error.message, false);
@@ -178,16 +200,19 @@ function showResult(message, success, data = null, scrapeStats = null) {
   let html = `<div>${message}</div>`;
 
   if (data) {
-    html += `
-      <div class="result-stats">
-        <div class="result-stat imported">
-          <span class="count">${data.imported}</span> new
-        </div>
-        <div class="result-stat skipped">
-          <span class="count">${data.skipped}</span> skipped
-        </div>
-      </div>
-    `;
+    html += `<div class="result-stats">`;
+    html += `<div class="result-stat imported"><span class="count">${data.imported}</span> new</div>`;
+
+    if (data.updated > 0) {
+      html += `<div class="result-stat updated"><span class="count">${data.updated}</span> updated</div>`;
+    }
+
+    if (data.price_drops > 0) {
+      html += `<div class="result-stat price-drop"><span class="count">${data.price_drops}</span> price drops!</div>`;
+    }
+
+    html += `<div class="result-stat skipped"><span class="count">${data.skipped}</span> unchanged</div>`;
+    html += `</div>`;
   }
 
   // Show scrape stats if available
@@ -316,6 +341,108 @@ async function scrapeTemuAllTabs() {
 
   console.log('[Judi\'s Wishlist] === MULTI-TAB SCRAPER ===');
 
+  // === METHOD 1: Try to find cart data in JavaScript/JSON ===
+  console.log('[Judi\'s Wishlist] Attempting to find cart data in page JavaScript...');
+
+  // Look for cart data in common locations
+  const dataLocations = [
+    () => window.__INITIAL_STATE__?.cart?.items,
+    () => window.__INITIAL_STATE__?.cartData?.items,
+    () => window.__NEXT_DATA__?.props?.pageProps?.cart?.items,
+    () => window.__NUXT__?.state?.cart?.items,
+    () => window.cartData?.items,
+    () => window.pageData?.cart?.items,
+  ];
+
+  for (const getter of dataLocations) {
+    try {
+      const items = getter();
+      if (items && Array.isArray(items) && items.length > 0) {
+        console.log(`[Judi\'s Wishlist] Found ${items.length} items in JavaScript data!`);
+        items.forEach(item => {
+          const productId = item.goods_id || item.goodsId || item.product_id || item.id;
+          if (!productId || allItems.has(String(productId))) return;
+
+          allItems.set(String(productId), {
+            product_id: String(productId),
+            product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+            title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
+            image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img,
+            price: item.price || item.sale_price || item.salePrice || item.current_price,
+            quantity: item.quantity || item.qty || 1,
+          });
+          stats.withImage++;
+          stats.withPrice++;
+        });
+
+        if (allItems.size > 0) {
+          console.log(`[Judi\'s Wishlist] Successfully extracted ${allItems.size} items from JS data`);
+          const finalItems = Array.from(allItems.values());
+          stats.total = finalItems.length;
+          stats.withImage = finalItems.filter(i => i.image_url).length;
+          stats.withPrice = finalItems.filter(i => i.price).length;
+          finalItems._stats = stats;
+          return finalItems;
+        }
+      }
+    } catch (e) { /* continue */ }
+  }
+
+  // === METHOD 2: Look for JSON in script tags ===
+  console.log('[Judi\'s Wishlist] Checking script tags for cart data...');
+  const scripts = document.querySelectorAll('script:not([src])');
+  for (const script of scripts) {
+    const text = script.textContent || '';
+    // Look for cart-like JSON structures
+    const cartPatterns = [
+      /"goods_id"\s*:\s*"?(\d+)"?/g,
+      /"goodsId"\s*:\s*"?(\d+)"?/g,
+    ];
+
+    for (const pattern of cartPatterns) {
+      const matches = text.matchAll(pattern);
+      for (const match of matches) {
+        const goodsId = match[1];
+        if (!allItems.has(goodsId)) {
+          // Try to extract more data around this goods_id
+          const contextStart = Math.max(0, match.index - 500);
+          const contextEnd = Math.min(text.length, match.index + 1000);
+          const context = text.slice(contextStart, contextEnd);
+
+          // Extract data from context
+          const titleMatch = context.match(/"(?:goods_name|title|name)"\s*:\s*"([^"]+)"/);
+          const imgMatch = context.match(/"(?:thumb_url|image|img|goods_img)"\s*:\s*"([^"]+)"/);
+          const priceMatch = context.match(/"(?:price|sale_price|salePrice)"\s*:\s*(\d+\.?\d*)/);
+
+          if (titleMatch || imgMatch) {
+            allItems.set(goodsId, {
+              product_id: goodsId,
+              product_url: `https://www.temu.com/goods.html?goods_id=${goodsId}`,
+              title: titleMatch ? titleMatch[1] : 'Unknown Product',
+              image_url: imgMatch ? imgMatch[1].replace(/\\/g, '') : null,
+              price: priceMatch ? parseFloat(priceMatch[1]) : null,
+              quantity: 1,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (allItems.size > 50) {
+    console.log(`[Judi\'s Wishlist] Found ${allItems.size} items from script tags`);
+    const finalItems = Array.from(allItems.values());
+    stats.total = finalItems.length;
+    stats.withImage = finalItems.filter(i => i.image_url).length;
+    stats.withPrice = finalItems.filter(i => i.price).length;
+    finalItems._stats = stats;
+    return finalItems;
+  }
+
+  // === METHOD 3: Fall back to DOM scraping ===
+  console.log('[Judi\'s Wishlist] Falling back to DOM scraping...');
+  allItems.clear(); // Reset for DOM scraping
+
   // Helper function to scroll through current view
   async function scrollCurrentTab() {
     return new Promise((resolve) => {
@@ -372,14 +499,17 @@ async function scrapeTemuAllTabs() {
       const productId = match[1];
       if (allItems.has(productId)) return; // Already have this item
 
-      // Find container
+      // Find container - walk up to find the cart item wrapper
       let container = link;
-      for (let i = 0; i < 15 && container; i++) {
+      for (let i = 0; i < 20 && container; i++) {
         container = container.parentElement;
         if (!container) break;
-        if (container.querySelector('img[src*="kwcdn"]')) break;
+        // Look for a container that has both image and price elements
+        const hasImg = container.querySelector('img');
+        const hasPrice = container.textContent?.includes('$');
+        if (hasImg && hasPrice) break;
       }
-      container = container || link.parentElement?.parentElement?.parentElement;
+      container = container || link.parentElement?.parentElement?.parentElement?.parentElement;
 
       // Get title
       let title = link.textContent?.trim();
@@ -388,23 +518,72 @@ async function scrapeTemuAllTabs() {
         title = img?.alt || 'Unknown Product';
       }
 
-      // Get image
+      // Get image - try multiple approaches
       let imageUrl = null;
-      const img = container?.querySelector('img[src*="kwcdn"], img[src*="akamaized"]');
-      if (img) {
-        imageUrl = img.src || img.dataset?.src || img.getAttribute('data-src');
+      // Method 1: Direct img with known CDN
+      const imgSelectors = [
+        'img[src*="img.kwcdn.com"]',
+        'img[src*="kwcdn"]',
+        'img[src*="akamaized"]',
+        'img[data-src*="kwcdn"]',
+        'img[data-src*="akamaized"]',
+      ];
+      for (const sel of imgSelectors) {
+        const img = container?.querySelector(sel);
+        if (img) {
+          imageUrl = img.src || img.dataset?.src || img.getAttribute('data-src');
+          if (imageUrl && imageUrl.startsWith('http')) break;
+        }
+      }
+      // Method 2: Any img with src
+      if (!imageUrl) {
+        const anyImg = container?.querySelector('img[src^="http"]');
+        if (anyImg && !anyImg.src.includes('icon') && !anyImg.src.includes('logo')) {
+          imageUrl = anyImg.src;
+        }
       }
 
-      // Get price
+      // Get price - try multiple approaches
       let price = null;
-      const priceText = container?.textContent?.match(/\$(\d+\.?\d*)/);
-      if (priceText) {
-        price = parseFloat(priceText[1]);
+      // Method 1: Look for elements with price-like classes
+      const priceSelectors = [
+        '[class*="price"]',
+        '[class*="Price"]',
+        '[class*="cost"]',
+        '[class*="Cost"]',
+        '[data-testid*="price"]',
+      ];
+      for (const sel of priceSelectors) {
+        const priceEl = container?.querySelector(sel);
+        if (priceEl) {
+          const priceMatch = priceEl.textContent?.match(/\$\s*(\d+\.?\d*)/);
+          if (priceMatch) {
+            price = parseFloat(priceMatch[1]);
+            break;
+          }
+        }
+      }
+      // Method 2: Search entire container for price pattern
+      if (!price && container) {
+        // Look for prices, prefer the "current" price (usually the lower one after discount)
+        const allPrices = container.textContent?.match(/\$\s*(\d+\.?\d*)/g) || [];
+        if (allPrices.length > 0) {
+          // Parse all prices and take the lowest (usually the sale price)
+          const priceValues = allPrices.map(p => parseFloat(p.replace(/\$\s*/, '')));
+          price = Math.min(...priceValues.filter(p => p > 0));
+        }
+      }
+      // Method 3: Check for "LAST DAY" or sale price patterns
+      if (!price && container) {
+        const saleMatch = container.textContent?.match(/LAST DAY\s*\$(\d+\.?\d*)/i);
+        if (saleMatch) {
+          price = parseFloat(saleMatch[1]);
+        }
       }
 
       // Get quantity
       let quantity = 1;
-      const qtyEl = container?.querySelector('input[type="text"], input[value]');
+      const qtyEl = container?.querySelector('input[type="text"], input[value], input[type="number"]');
       if (qtyEl) {
         quantity = parseInt(qtyEl.value) || 1;
       }
@@ -536,17 +715,35 @@ async function scrapeTemuAllTabs() {
       const tabName = tab.textContent?.trim() || `Tab ${i + 1}`;
       console.log(`[Judi\'s Wishlist] Processing tab ${i + 1}/${tabsToProcess.length}: ${tabName}`);
 
-      // Click the tab
-      tab.click();
+      // Click the tab - try multiple approaches
+      // First scroll the tab into view
+      tab.scrollIntoView({ behavior: 'instant', block: 'center' });
+      await new Promise(r => setTimeout(r, 300));
 
-      // Wait for content to load
-      await new Promise(r => setTimeout(r, 1500));
+      // Try clicking the tab itself, or find a clickable child
+      const clickTarget = tab.querySelector('a, button, span') || tab;
+      clickTarget.click();
+
+      // Also try dispatching a proper click event
+      const clickEvent = new MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+        view: window
+      });
+      tab.dispatchEvent(clickEvent);
+
+      // Wait longer for content to load after tab click
+      await new Promise(r => setTimeout(r, 2500));
+
+      // Scroll to top first
+      window.scrollTo(0, 0);
+      await new Promise(r => setTimeout(r, 500));
 
       // Scroll through this tab's items
       await scrollCurrentTab();
 
       // Wait a bit more for items to render
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
 
       // Scrape items
       const items = scrapeCurrentItems();
@@ -936,8 +1133,206 @@ function scrapeCartItems(store) {
   return items;
 }
 
+// Validate a Temu share link
+function isValidShareLink(url) {
+  try {
+    const parsed = new URL(url);
+    return (
+      (parsed.hostname.includes('temu.com') || parsed.hostname.includes('share.temu.com')) &&
+      (parsed.pathname.includes('share') || parsed.searchParams.has('share_key'))
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Import from a Temu share link
+async function importFromShareLink() {
+  const shareUrl = elements.shareLink.value.trim();
+
+  if (!shareUrl) {
+    showShareResult('Please paste a Temu share link', false);
+    return;
+  }
+
+  if (!isValidShareLink(shareUrl)) {
+    showShareResult('Invalid share link. Please paste a valid Temu share link.', false);
+    return;
+  }
+
+  elements.shareImportBtn.disabled = true;
+  elements.shareImportBtn.textContent = 'Opening share link...';
+  elements.shareResult.classList.add('hidden');
+
+  try {
+    console.log('[Judi\'s Wishlist] Opening share link:', shareUrl);
+
+    // Open the share link in a new tab
+    const tab = await chrome.tabs.create({ url: shareUrl, active: false });
+
+    elements.shareImportBtn.textContent = 'Waiting for page to load...';
+
+    // Wait for the tab to finish loading
+    await waitForTabLoad(tab.id);
+
+    // Give extra time for JavaScript to render content
+    await new Promise(r => setTimeout(r, 3000));
+
+    elements.shareImportBtn.textContent = 'Scanning cart items...';
+
+    // Execute the scraper on the share page
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: scrapeTemuAllTabs,
+    });
+
+    const items = results[0]?.result || [];
+    console.log('[Judi\'s Wishlist] Found items from share link:', items.length);
+
+    // Close the tab after scraping
+    try {
+      await chrome.tabs.remove(tab.id);
+    } catch (e) {
+      console.log('[Judi\'s Wishlist] Could not close tab:', e);
+    }
+
+    if (items.length === 0) {
+      showShareResult('No items found. The share link may have expired or the cart is empty.', false);
+      return;
+    }
+
+    elements.shareImportBtn.textContent = `Importing ${items.length} items...`;
+
+    // Send to wishlist app
+    const listId = parseInt(elements.shareListSelect.value);
+    const response = await fetch(`${API_BASE}/api/items/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        store: 'temu',
+        items: items,
+        list_id: listId,
+      }),
+    });
+
+    if (!response.ok) throw new Error('Failed to import items');
+
+    const data = await response.json();
+    const scrapeStats = items._stats || null;
+
+    // Build result message
+    let msg = `Imported ${data.imported} new`;
+    if (data.updated > 0) {
+      msg += `, ${data.updated} prices updated`;
+      if (data.price_drops > 0) msg += ` (${data.price_drops} dropped!)`;
+    }
+    if (data.skipped > 0) {
+      msg += `, ${data.skipped} unchanged`;
+    }
+    showShareResult(msg, true, data, scrapeStats);
+
+    // Clear the input on success
+    elements.shareLink.value = '';
+
+  } catch (error) {
+    console.error('[Judi\'s Wishlist] Share import error:', error);
+    showShareResult('Error: ' + error.message, false);
+  } finally {
+    elements.shareImportBtn.disabled = false;
+    elements.shareImportBtn.textContent = 'Import from Share Link';
+  }
+}
+
+// Wait for a tab to finish loading
+function waitForTabLoad(tabId) {
+  return new Promise((resolve, reject) => {
+    let timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error('Page load timeout'));
+    }, 30000); // 30 second timeout
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+// Show share result message
+function showShareResult(message, success, data = null, scrapeStats = null) {
+  elements.shareResult.classList.remove('hidden', 'success', 'error', 'warning');
+  elements.shareResult.classList.add(success ? 'success' : 'error');
+
+  let html = `<div>${message}</div>`;
+
+  if (data) {
+    html += `<div class="result-stats">`;
+    html += `<div class="result-stat imported"><span class="count">${data.imported}</span> new</div>`;
+
+    if (data.updated > 0) {
+      html += `<div class="result-stat updated"><span class="count">${data.updated}</span> updated</div>`;
+    }
+
+    if (data.price_drops > 0) {
+      html += `<div class="result-stat price-drop"><span class="count">${data.price_drops}</span> price drops!</div>`;
+    }
+
+    html += `<div class="result-stat skipped"><span class="count">${data.skipped}</span> unchanged</div>`;
+    html += `</div>`;
+  }
+
+  // Show scrape stats if available
+  if (scrapeStats) {
+    html += `<div class="scrape-stats">`;
+    if (scrapeStats.total) {
+      html += `<div class="stat-ok">✓ Found ${scrapeStats.total} items from share link</div>`;
+    }
+
+    const imgPercent = scrapeStats.total ? Math.round((scrapeStats.withImage / scrapeStats.total) * 100) : 0;
+    const pricePercent = scrapeStats.total ? Math.round((scrapeStats.withPrice / scrapeStats.total) * 100) : 0;
+
+    if (imgPercent < 100 || pricePercent < 100) {
+      html += `
+        <div class="stat-detail">
+          Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) |
+          Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)
+        </div>
+      `;
+    }
+    html += `</div>`;
+  }
+
+  elements.shareResult.innerHTML = html;
+}
+
+// Paste from clipboard
+async function pasteFromClipboard() {
+  try {
+    const text = await navigator.clipboard.readText();
+    elements.shareLink.value = text;
+  } catch (error) {
+    console.error('Failed to paste from clipboard:', error);
+    // Fallback: focus the input so user can paste manually
+    elements.shareLink.focus();
+  }
+}
+
 // Event listeners
 elements.importBtn.addEventListener('click', importCart);
+elements.shareImportBtn.addEventListener('click', importFromShareLink);
+elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
+
+// Allow Enter key to trigger import
+elements.shareLink.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    importFromShareLink();
+  }
+});
 
 // Initialize
 init();

@@ -171,6 +171,17 @@ h1 {
   color: #16a34a;
 }
 
+.result-stat.updated .count {
+  color: #2563eb;
+}
+
+.result-stat.price-drop .count {
+  color: #16a34a;
+  background: #dcfce7;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
 .result-stat.skipped .count {
   color: #6b7280;
 }
@@ -231,6 +242,64 @@ h1 {
 
 .footer a:hover {
   text-decoration: underline;
+}
+
+/* Share link import section */
+.share-import {
+  margin-top: 12px;
+  padding: 12px;
+  background: #f9fafb;
+  border-radius: 8px;
+  border: 1px dashed #d1d5db;
+}
+
+.share-input-wrapper {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.share-input {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 13px;
+  border: 2px solid #e5e7eb;
+  border-radius: 6px;
+  background: white;
+}
+
+.share-input:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+
+.btn-paste {
+  padding: 8px 12px;
+  border: 2px solid #e5e7eb;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.btn-paste:hover {
+  background: #f3f4f6;
+  border-color: #d1d5db;
+}
+
+.btn-secondary {
+  background: #f3f4f6;
+  color: #374151;
+  border: 2px solid #e5e7eb;
+}
+
+.btn-secondary:hover {
+  background: #e5e7eb;
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .hidden {
