@@ -160,7 +160,17 @@ async function importCart() {
 
     const data = await response.json();
     const scrapeStats = items._stats || null;
-    showResult(`Imported ${data.imported} items, ${data.skipped} already existed`, true, data, scrapeStats);
+
+    // Build result message
+    let msg = `Imported ${data.imported} new`;
+    if (data.updated > 0) {
+      msg += `, ${data.updated} prices updated`;
+      if (data.price_drops > 0) msg += ` (${data.price_drops} dropped!)`;
+    }
+    if (data.skipped > 0) {
+      msg += `, ${data.skipped} unchanged`;
+    }
+    showResult(msg, true, data, scrapeStats);
 
   } catch (error) {
     showResult('Error: ' + error.message, false);
@@ -178,16 +188,19 @@ function showResult(message, success, data = null, scrapeStats = null) {
   let html = `<div>${message}</div>`;
 
   if (data) {
-    html += `
-      <div class="result-stats">
-        <div class="result-stat imported">
-          <span class="count">${data.imported}</span> new
-        </div>
-        <div class="result-stat skipped">
-          <span class="count">${data.skipped}</span> skipped
-        </div>
-      </div>
-    `;
+    html += `<div class="result-stats">`;
+    html += `<div class="result-stat imported"><span class="count">${data.imported}</span> new</div>`;
+
+    if (data.updated > 0) {
+      html += `<div class="result-stat updated"><span class="count">${data.updated}</span> updated</div>`;
+    }
+
+    if (data.price_drops > 0) {
+      html += `<div class="result-stat price-drop"><span class="count">${data.price_drops}</span> price drops!</div>`;
+    }
+
+    html += `<div class="result-stat skipped"><span class="count">${data.skipped}</span> unchanged</div>`;
+    html += `</div>`;
   }
 
   // Show scrape stats if available

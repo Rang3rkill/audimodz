@@ -129,6 +129,8 @@ def get_duplicates():
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""
+    from datetime import datetime
+
     data = request.get_json()
     store = data.get('store')
     items_data = data.get('items', [])
@@ -140,19 +142,50 @@ def import_items():
     results = []
     imported = 0
     skipped = 0
+    updated = 0
+    price_drops = 0
+    price_increases = 0
 
     for item_data in items_data:
         product_id = item_data.get('product_id')
+        new_price = item_data.get('price')
 
-        # Check for duplicate
+        # Check for existing item
         existing = Item.get_by_product(store, product_id)
         if existing:
-            results.append({
-                'id': existing['id'],
-                'product_id': product_id,
-                'status': 'skipped'
-            })
-            skipped += 1
+            # Check if price changed
+            old_price = existing.get('current_price')
+
+            if new_price is not None and old_price != new_price:
+                # Price changed - update the item
+                Item.update(
+                    existing['id'],
+                    last_price=old_price,
+                    current_price=new_price,
+                    price_updated_at=datetime.now().isoformat()
+                )
+                results.append({
+                    'id': existing['id'],
+                    'product_id': product_id,
+                    'status': 'updated',
+                    'old_price': old_price,
+                    'new_price': new_price
+                })
+                updated += 1
+
+                # Track price direction
+                if old_price and new_price < old_price:
+                    price_drops += 1
+                elif old_price and new_price > old_price:
+                    price_increases += 1
+            else:
+                # No price change - skip
+                results.append({
+                    'id': existing['id'],
+                    'product_id': product_id,
+                    'status': 'skipped'
+                })
+                skipped += 1
             continue
 
         # Create new item
@@ -162,7 +195,7 @@ def import_items():
             product_url=item_data.get('product_url', ''),
             title=item_data.get('title', ''),
             image_url=item_data.get('image_url'),
-            current_price=item_data.get('price'),
+            current_price=new_price,
             quantity=item_data.get('quantity', 1),
             list_id=list_id
         )
@@ -178,6 +211,8 @@ def import_items():
         'success': True,
         'imported': imported,
         'skipped': skipped,
-        'updated': 0,
+        'updated': updated,
+        'price_drops': price_drops,
+        'price_increases': price_increases,
         'items': results
     })
