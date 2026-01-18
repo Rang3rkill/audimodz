@@ -422,41 +422,66 @@ async function scrapeTemuAllTabs() {
     return items;
   }
 
-  // Find filter tabs - try multiple selectors
-  const tabSelectors = [
-    'button[class*="tab"]',
-    'div[class*="tab"]',
-    'span[class*="tab"]',
-    '[role="tab"]',
-    // Additional selectors for Temu's updated UI
-    '[class*="Tab"]',
-    '[class*="filter"]',
-    '[class*="Filter"]',
-    'button[class*="select"]',
-    'div[class*="category"]',
-  ];
-
+  // Find filter tabs - try multiple approaches
   let tabs = [];
-  for (const sel of tabSelectors) {
-    try {
-      const found = document.querySelectorAll(sel);
-      // Look for tabs that have counts like "All (540)" or "Local warehouse (439)"
-      const validTabs = Array.from(found).filter(el => {
-        const text = el.textContent || '';
-        return text.match(/\(\d+\)/) && (
-          text.includes('All') ||
-          text.includes('warehouse') ||
-          text.includes('Warehouse') ||
-          text.includes('Ships') ||
-          text.includes('Temu') ||
-          text.includes('Local') ||
-          text.includes('Standard')
+
+  // Approach 1: Find ANY element with text like "All (539)" or "Local warehouse (440)"
+  const allElements = document.querySelectorAll('*');
+  const tabPattern = /^(All|Local warehouse|Ships from Temu|Standard shipping|Temu shipping)\s*\(\d+\)$/i;
+
+  for (const el of allElements) {
+    // Check direct text content (not including children)
+    const directText = Array.from(el.childNodes)
+      .filter(n => n.nodeType === Node.TEXT_NODE)
+      .map(n => n.textContent.trim())
+      .join('');
+
+    // Also check full text for simpler elements
+    const fullText = el.textContent?.trim() || '';
+
+    if ((tabPattern.test(directText) || tabPattern.test(fullText)) &&
+        el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE') {
+      // Make sure it's clickable (has reasonable size and is visible)
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 20 && rect.height > 10 && rect.top < window.innerHeight) {
+        // Avoid duplicates (parent/child with same text)
+        const isDuplicate = tabs.some(t =>
+          t.textContent?.trim() === el.textContent?.trim() ||
+          t.contains(el) ||
+          el.contains(t)
         );
-      });
-      if (validTabs.length > tabs.length) {
-        tabs = validTabs;
+        if (!isDuplicate) {
+          tabs.push(el);
+          console.log(`[Judi\'s Wishlist] Found tab: "${el.textContent?.trim()}" (${el.tagName})`);
+        }
       }
-    } catch (e) { /* ignore selector errors */ }
+    }
+  }
+
+  // Approach 2: Fallback to class-based selectors if nothing found
+  if (tabs.length === 0) {
+    const tabSelectors = [
+      'button[class*="tab"]',
+      'div[class*="tab"]',
+      'span[class*="tab"]',
+      '[role="tab"]',
+      '[class*="Tab"]',
+      '[class*="filter"]',
+      '[class*="Filter"]',
+    ];
+
+    for (const sel of tabSelectors) {
+      try {
+        const found = document.querySelectorAll(sel);
+        const validTabs = Array.from(found).filter(el => {
+          const text = el.textContent || '';
+          return text.match(/\(\d+\)/);
+        });
+        if (validTabs.length > tabs.length) {
+          tabs = validTabs;
+        }
+      } catch (e) { /* ignore */ }
+    }
   }
 
   console.log(`[Judi\'s Wishlist] Found ${tabs.length} filter tabs`);
