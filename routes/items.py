@@ -2,8 +2,45 @@ from flask import Blueprint, jsonify, request
 from models.item import Item
 import requests
 import re
+import time
+from datetime import datetime
+from functools import wraps
 
 items_bp = Blueprint('items', __name__, url_prefix='/api/items')
+
+# Rate limiting for scraping
+SCRAPE_DELAY = 1.0  # seconds between scrape requests
+last_scrape_time = 0
+
+
+def rate_limit_scrape():
+    """Ensure we don't hit Temu too fast."""
+    global last_scrape_time
+    elapsed = time.time() - last_scrape_time
+    if elapsed < SCRAPE_DELAY:
+        time.sleep(SCRAPE_DELAY - elapsed)
+    last_scrape_time = time.time()
+
+
+def retry_on_failure(max_retries=3, delay=2):
+    """Decorator for retrying failed requests with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        wait_time = delay * (2 ** attempt)
+                        print(f"Attempt {attempt + 1} failed: {e}. Retrying in {wait_time}s...")
+                        time.sleep(wait_time)
+            print(f"All {max_retries} attempts failed: {last_error}")
+            return None
+        return wrapper
+    return decorator
 
 
 @items_bp.route('', methods=['GET'])
@@ -13,6 +50,13 @@ def get_items():
     list_id = request.args.get('list_id', type=int)
     in_ready_to_buy = request.args.get('in_ready_to_buy')
 
+    # New filters
+    missing_data = request.args.get('missing_data')  # 'image', 'price', 'any'
+    has_price_drop = request.args.get('has_price_drop')
+    is_favorite = request.args.get('is_favorite')
+    sort_by = request.args.get('sort_by', 'position')  # position, price, date_added, title
+    sort_order = request.args.get('sort_order', 'asc')
+
     if in_ready_to_buy is not None:
         in_ready_to_buy = in_ready_to_buy.lower() == 'true'
 
@@ -21,6 +65,34 @@ def get_items():
         list_id=list_id,
         in_ready_to_buy=in_ready_to_buy
     )
+
+    # Apply additional filters
+    if missing_data:
+        if missing_data == 'image':
+            items = [i for i in items if not i.get('image_url')]
+        elif missing_data == 'price':
+            items = [i for i in items if i.get('current_price') is None]
+        elif missing_data == 'any':
+            items = [i for i in items if not i.get('image_url') or i.get('current_price') is None]
+
+    if has_price_drop and has_price_drop.lower() == 'true':
+        items = [i for i in items if i.get('last_price') and i.get('current_price')
+                 and i['current_price'] < i['last_price']]
+
+    if is_favorite and is_favorite.lower() == 'true':
+        items = [i for i in items if i.get('is_favorite')]
+
+    # Apply sorting
+    if sort_by == 'price':
+        items = sorted(items, key=lambda x: x.get('current_price') or 999999,
+                      reverse=(sort_order == 'desc'))
+    elif sort_by == 'date_added':
+        items = sorted(items, key=lambda x: x.get('date_added') or '',
+                      reverse=(sort_order == 'desc'))
+    elif sort_by == 'title':
+        items = sorted(items, key=lambda x: (x.get('title') or '').lower(),
+                      reverse=(sort_order == 'desc'))
+
     return jsonify(items)
 
 
@@ -64,6 +136,14 @@ def get_item(item_id):
 def update_item(item_id):
     """Update an item."""
     data = request.get_json()
+
+    # Track price changes
+    if 'current_price' in data:
+        existing = Item.get_by_id(item_id)
+        if existing and existing.get('current_price') != data['current_price']:
+            data['last_price'] = existing.get('current_price')
+            data['price_updated_at'] = datetime.now().isoformat()
+
     item = Item.update(item_id, **data)
     if not item:
         return jsonify({'error': 'Item not found'}), 404
@@ -77,6 +157,90 @@ def delete_item(item_id):
     if not deleted:
         return jsonify({'error': 'Item not found'}), 404
     return jsonify({'message': 'Item deleted'})
+
+
+@items_bp.route('/batch', methods=['POST'])
+def batch_operations():
+    """Perform batch operations on multiple items."""
+    data = request.get_json()
+    operation = data.get('operation')
+    item_ids = data.get('item_ids', [])
+
+    if not operation:
+        return jsonify({'error': 'operation is required'}), 400
+    if not item_ids:
+        return jsonify({'error': 'item_ids is required'}), 400
+
+    results = {'success': 0, 'failed': 0, 'errors': []}
+
+    if operation == 'delete':
+        for item_id in item_ids:
+            try:
+                if Item.delete(item_id):
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
+                    results['errors'].append(f'Item {item_id} not found')
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f'Item {item_id}: {str(e)}')
+
+    elif operation == 'move_to_list':
+        list_id = data.get('list_id')
+        if not list_id:
+            return jsonify({'error': 'list_id is required for move_to_list'}), 400
+        for item_id in item_ids:
+            try:
+                if Item.update(item_id, list_id=list_id):
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f'Item {item_id}: {str(e)}')
+
+    elif operation == 'move_to_category':
+        category_id = data.get('category_id')
+        if not category_id:
+            return jsonify({'error': 'category_id is required for move_to_category'}), 400
+        for item_id in item_ids:
+            try:
+                if Item.update(item_id, category_id=category_id):
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f'Item {item_id}: {str(e)}')
+
+    elif operation == 'toggle_ready':
+        value = data.get('value', True)
+        for item_id in item_ids:
+            try:
+                if Item.update(item_id, in_ready_to_buy=1 if value else 0):
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f'Item {item_id}: {str(e)}')
+
+    elif operation == 'toggle_favorite':
+        value = data.get('value', True)
+        for item_id in item_ids:
+            try:
+                if Item.update(item_id, is_favorite=1 if value else 0):
+                    results['success'] += 1
+                else:
+                    results['failed'] += 1
+            except Exception as e:
+                results['failed'] += 1
+                results['errors'].append(f'Item {item_id}: {str(e)}')
+
+    else:
+        return jsonify({'error': f'Unknown operation: {operation}'}), 400
+
+    return jsonify(results)
 
 
 @items_bp.route('/reorder', methods=['POST'])
@@ -117,6 +281,13 @@ def get_ready_count():
 def get_stats():
     """Get item statistics for dashboard."""
     stats = Item.get_stats()
+
+    # Add missing data counts
+    items = Item.get_all()
+    stats['missing_image'] = len([i for i in items if not i.get('image_url')])
+    stats['missing_price'] = len([i for i in items if i.get('current_price') is None])
+    stats['missing_any'] = len([i for i in items if not i.get('image_url') or i.get('current_price') is None])
+
     return jsonify(stats)
 
 
@@ -128,11 +299,50 @@ def get_duplicates():
     return jsonify(duplicates)
 
 
+@items_bp.route('/export', methods=['GET'])
+def export_items():
+    """Export items as JSON for backup/sharing."""
+    format_type = request.args.get('format', 'json')
+    list_id = request.args.get('list_id', type=int)
+
+    items = Item.get_all(list_id=list_id) if list_id else Item.get_all()
+
+    if format_type == 'csv':
+        # Build CSV string
+        headers = ['id', 'store', 'product_id', 'title', 'current_price', 'image_url', 'product_url', 'quantity', 'is_favorite', 'in_ready_to_buy']
+        lines = [','.join(headers)]
+        for item in items:
+            row = [
+                str(item.get('id', '')),
+                item.get('store', ''),
+                item.get('product_id', ''),
+                f'"{item.get("title", "").replace('"', '""')}"',
+                str(item.get('current_price', '')),
+                item.get('image_url', '') or '',
+                item.get('product_url', ''),
+                str(item.get('quantity', 1)),
+                str(item.get('is_favorite', 0)),
+                str(item.get('in_ready_to_buy', 0)),
+            ]
+            lines.append(','.join(row))
+
+        from flask import Response
+        return Response(
+            '\n'.join(lines),
+            mimetype='text/csv',
+            headers={'Content-Disposition': 'attachment; filename=wishlist_export.csv'}
+        )
+
+    return jsonify({
+        'exported_at': datetime.now().isoformat(),
+        'count': len(items),
+        'items': items
+    })
+
+
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""
-    from datetime import datetime
-
     data = request.get_json()
     store = data.get('store')
     items_data = data.get('items', [])
@@ -147,67 +357,79 @@ def import_items():
     updated = 0
     price_drops = 0
     price_increases = 0
+    errors = []
 
     for item_data in items_data:
-        product_id = item_data.get('product_id')
-        new_price = item_data.get('price')
+        try:
+            product_id = item_data.get('product_id')
+            if not product_id:
+                errors.append('Item missing product_id')
+                continue
 
-        # Check for existing item
-        existing = Item.get_by_product(store, product_id)
-        if existing:
-            # Check if price changed
-            old_price = existing.get('current_price')
+            new_price = item_data.get('price')
 
-            if new_price is not None and old_price != new_price:
-                # Price changed - update the item
-                Item.update(
-                    existing['id'],
-                    last_price=old_price,
-                    current_price=new_price,
-                    price_updated_at=datetime.now().isoformat()
-                )
-                results.append({
-                    'id': existing['id'],
-                    'product_id': product_id,
-                    'status': 'updated',
-                    'old_price': old_price,
-                    'new_price': new_price
-                })
-                updated += 1
+            # Check for existing item
+            existing = Item.get_by_product(store, product_id)
+            if existing:
+                # Check if price changed
+                old_price = existing.get('current_price')
 
-                # Track price direction
-                if old_price and new_price < old_price:
-                    price_drops += 1
-                elif old_price and new_price > old_price:
-                    price_increases += 1
-            else:
-                # No price change - skip
-                results.append({
-                    'id': existing['id'],
-                    'product_id': product_id,
-                    'status': 'skipped'
-                })
-                skipped += 1
-            continue
+                if new_price is not None and old_price != new_price:
+                    # Price changed - update the item
+                    Item.update(
+                        existing['id'],
+                        last_price=old_price,
+                        current_price=new_price,
+                        price_updated_at=datetime.now().isoformat()
+                    )
+                    results.append({
+                        'id': existing['id'],
+                        'product_id': product_id,
+                        'status': 'updated',
+                        'old_price': old_price,
+                        'new_price': new_price
+                    })
+                    updated += 1
 
-        # Create new item
-        item = Item.create(
-            store=store,
-            product_id=product_id,
-            product_url=item_data.get('product_url', ''),
-            title=item_data.get('title', ''),
-            image_url=item_data.get('image_url'),
-            current_price=new_price,
-            quantity=item_data.get('quantity', 1),
-            list_id=list_id
-        )
+                    # Track price direction
+                    if old_price and new_price < old_price:
+                        price_drops += 1
+                    elif old_price and new_price > old_price:
+                        price_increases += 1
+                else:
+                    # No price change - but update image if missing
+                    if not existing.get('image_url') and item_data.get('image_url'):
+                        Item.update(existing['id'], image_url=item_data.get('image_url'))
 
-        results.append({
-            'id': item['id'],
-            'product_id': product_id,
-            'status': 'imported'
-        })
-        imported += 1
+                    results.append({
+                        'id': existing['id'],
+                        'product_id': product_id,
+                        'status': 'skipped'
+                    })
+                    skipped += 1
+                continue
+
+            # Create new item
+            item = Item.create(
+                store=store,
+                product_id=product_id,
+                product_url=item_data.get('product_url', ''),
+                title=item_data.get('title', 'Unknown Product'),
+                image_url=item_data.get('image_url'),
+                current_price=new_price,
+                quantity=item_data.get('quantity', 1),
+                list_id=list_id
+            )
+
+            results.append({
+                'id': item['id'],
+                'product_id': product_id,
+                'status': 'imported'
+            })
+            imported += 1
+
+        except Exception as e:
+            errors.append(f'Error importing {item_data.get("product_id", "unknown")}: {str(e)}')
 
     return jsonify({
         'success': True,
@@ -216,97 +438,116 @@ def import_items():
         'updated': updated,
         'price_drops': price_drops,
         'price_increases': price_increases,
+        'errors': errors if errors else None,
         'items': results
     })
 
 
+@retry_on_failure(max_retries=3, delay=2)
 def scrape_temu_product(url):
-    """Scrape product data from a Temu product page."""
+    """Scrape product data from a Temu product page with retry logic."""
+    rate_limit_scrape()
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
     }
 
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        html = response.text
+    response = requests.get(url, headers=headers, timeout=20)
+    response.raise_for_status()
+    html = response.text
 
-        data = {}
+    data = {}
 
-        # Try to extract from JSON in script tags first
-        # Look for window.__INITIAL_STATE__ or similar
-        json_patterns = [
-            r'window\.__INITIAL_STATE__\s*=\s*({.+?});?\s*</script>',
-            r'"goods_name"\s*:\s*"([^"]+)"',
-        ]
+    # Extract title - multiple patterns for reliability
+    title_patterns = [
+        r'"goods_name"\s*:\s*"([^"]+)"',
+        r'"goodsName"\s*:\s*"([^"]+)"',
+        r'"title"\s*:\s*"([^"]+)"',
+        r'"productName"\s*:\s*"([^"]+)"',
+        r'<meta property="og:title" content="([^"]+)"',
+        r'<title>([^<|]+)',
+        r'"name"\s*:\s*"([^"]+)"',
+    ]
+    for pattern in title_patterns:
+        match = re.search(pattern, html)
+        if match:
+            title = match.group(1)
+            # Clean up escaped characters
+            try:
+                if '\\u' in title:
+                    title = title.encode().decode('unicode_escape')
+            except:
+                pass
+            title = title.strip()
+            # Filter out generic titles
+            if len(title) > 5 and len(title) < 500 and 'Temu' not in title:
+                data['title'] = title
+                break
 
-        # Extract title
-        title_patterns = [
-            r'"goods_name"\s*:\s*"([^"]+)"',
-            r'"title"\s*:\s*"([^"]+)"',
-            r'<title>([^<]+)</title>',
-            r'"name"\s*:\s*"([^"]+)"',
-        ]
-        for pattern in title_patterns:
-            match = re.search(pattern, html)
-            if match:
-                title = match.group(1)
-                # Clean up escaped characters
-                title = title.encode().decode('unicode_escape') if '\\u' in title else title
-                if len(title) > 5 and len(title) < 500:
-                    data['title'] = title
+    # Extract image URL - multiple patterns
+    image_patterns = [
+        r'"thumb_url"\s*:\s*"(https?:[^"]+)"',
+        r'"thumbUrl"\s*:\s*"(https?:[^"]+)"',
+        r'"image"\s*:\s*"(https?:[^"]+)"',
+        r'"img"\s*:\s*"(https?:[^"]+)"',
+        r'"goods_img"\s*:\s*"(https?:[^"]+)"',
+        r'"goodsImg"\s*:\s*"(https?:[^"]+)"',
+        r'"hdThumbUrl"\s*:\s*"(https?:[^"]+)"',
+        r'<meta property="og:image" content="([^"]+)"',
+        r'"image_url"\s*:\s*"(https?:[^"]+)"',
+        r'<img[^>]+src="(https://[^"]*kwcdn[^"]*)"[^>]*>',
+        r'<img[^>]+src="(https://[^"]*akamaized[^"]*)"[^>]*>',
+    ]
+    for pattern in image_patterns:
+        match = re.search(pattern, html)
+        if match:
+            img_url = match.group(1)
+            # Clean up escaped characters
+            img_url = img_url.replace('\\/', '/').replace('\\u002F', '/')
+            # Validate it's a product image
+            if any(domain in img_url for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront']):
+                data['image_url'] = img_url
+                break
+
+    # Extract price - multiple patterns with validation
+    price_patterns = [
+        r'"priceInfo"[^}]*"price"\s*:\s*(\d+)',  # Price in cents
+        r'"salePrice"\s*:\s*(\d+\.?\d*)',
+        r'"price"\s*:\s*(\d+\.?\d*)',
+        r'"sale_price"\s*:\s*(\d+\.?\d*)',
+        r'"current_price"\s*:\s*(\d+\.?\d*)',
+        r'"displayPrice"\s*:\s*"?\$?(\d+\.?\d*)"?',
+        r'<meta property="product:price:amount" content="(\d+\.?\d*)"',
+        r'\$(\d+\.?\d{2})',  # Standard price format
+    ]
+    for pattern in price_patterns:
+        matches = re.findall(pattern, html)
+        for match in matches:
+            try:
+                price = float(match)
+                # Temu often stores prices in cents
+                if price > 100 and '.' not in str(match):
+                    price = price / 100
+                # Validate reasonable price
+                if 0.01 <= price <= 9999:
+                    data['price'] = round(price, 2)
                     break
+            except ValueError:
+                continue
+        if 'price' in data:
+            break
 
-        # Extract image URL
-        image_patterns = [
-            r'"thumb_url"\s*:\s*"(https?://[^"]+)"',
-            r'"image"\s*:\s*"(https?://[^"]+)"',
-            r'"img"\s*:\s*"(https?://[^"]+)"',
-            r'"goods_img"\s*:\s*"(https?://[^"]+)"',
-            r'<meta property="og:image" content="([^"]+)"',
-            r'"image_url"\s*:\s*"(https?://[^"]+)"',
-            # Look for product images in img tags
-            r'<img[^>]+src="(https://[^"]*kwcdn[^"]*)"[^>]*>',
-        ]
-        for pattern in image_patterns:
-            match = re.search(pattern, html)
-            if match:
-                img_url = match.group(1)
-                # Clean up escaped characters
-                img_url = img_url.replace('\\/', '/').replace('\\u002F', '/')
-                if 'kwcdn' in img_url or 'akamaized' in img_url or 'temu' in img_url:
-                    data['image_url'] = img_url
-                    break
-
-        # Extract price
-        price_patterns = [
-            r'"price"\s*:\s*(\d+\.?\d*)',
-            r'"sale_price"\s*:\s*(\d+\.?\d*)',
-            r'"current_price"\s*:\s*(\d+\.?\d*)',
-            r'"salePrice"\s*:\s*(\d+\.?\d*)',
-            r'\$(\d+\.?\d*)',
-        ]
-        for pattern in price_patterns:
-            match = re.search(pattern, html)
-            if match:
-                try:
-                    price = float(match.group(1))
-                    # Temu sometimes stores prices in cents
-                    if price > 1000:
-                        price = price / 100
-                    if 0 < price < 10000:
-                        data['price'] = price
-                        break
-                except ValueError:
-                    continue
-
-        return data
-
-    except Exception as e:
-        print(f"Error scraping {url}: {e}")
-        return None
+    return data if data else None
 
 
 @items_bp.route('/<int:item_id>/refresh', methods=['POST'])
@@ -324,28 +565,35 @@ def refresh_item(item_id):
 
     # Scrape based on store
     if 'temu' in store.lower() or 'temu.com' in product_url:
-        scraped = scrape_temu_product(product_url)
+        try:
+            scraped = scrape_temu_product(product_url)
+        except Exception as e:
+            return jsonify({'error': f'Scraping failed: {str(e)}'}), 500
     else:
         return jsonify({'error': f'Refresh not supported for store: {store}'}), 400
 
     if not scraped:
-        return jsonify({'error': 'Could not fetch product data'}), 500
+        return jsonify({'error': 'Could not fetch product data. The page may be unavailable or the product removed.'}), 500
 
     # Update item with scraped data
     updates = {}
     updated_fields = []
 
+    # Always update missing data
     if scraped.get('image_url') and not item.get('image_url'):
         updates['image_url'] = scraped['image_url']
         updated_fields.append('image')
 
-    if scraped.get('price') and not item.get('current_price'):
+    if scraped.get('price') is not None and item.get('current_price') is None:
         updates['current_price'] = scraped['price']
         updated_fields.append('price')
 
-    if scraped.get('title') and (not item.get('title') or item.get('title') == 'Unknown Product'):
+    if scraped.get('title') and (not item.get('title') or item.get('title') in ['Unknown Product', '']):
         updates['title'] = scraped['title']
         updated_fields.append('title')
+
+    # Track last refresh time
+    updates['last_checked'] = datetime.now().isoformat()
 
     if updates:
         updated_item = Item.update(item_id, **updates)
@@ -355,74 +603,171 @@ def refresh_item(item_id):
             'item': updated_item
         })
     else:
+        Item.update(item_id, last_checked=datetime.now().isoformat())
         return jsonify({
             'success': True,
             'updated_fields': [],
-            'message': 'No missing data to update'
+            'message': 'No missing data to update, but page was accessible'
         })
 
 
 @items_bp.route('/refresh-missing', methods=['POST'])
 def refresh_missing_data():
     """Refresh all items that are missing image or price data."""
+    data = request.get_json() or {}
+    limit = data.get('limit', 50)  # Limit to prevent long-running requests
+
     # Get all items missing data
     items = Item.get_all()
     missing_items = [
         i for i in items
-        if not i.get('image_url') or not i.get('current_price')
-    ]
+        if not i.get('image_url') or i.get('current_price') is None
+    ][:limit]
 
     if not missing_items:
         return jsonify({
             'success': True,
             'message': 'No items with missing data',
             'refreshed': 0,
-            'failed': 0
+            'failed': 0,
+            'total_missing': 0
         })
 
     refreshed = 0
     failed = 0
     results = []
 
-    for item in missing_items:
+    for idx, item in enumerate(missing_items):
         product_url = item.get('product_url')
         if not product_url:
             failed += 1
+            results.append({'id': item['id'], 'status': 'no_url'})
             continue
 
         store = item.get('store', '')
 
         # Scrape based on store
-        if 'temu' in store.lower() or 'temu.com' in product_url:
-            scraped = scrape_temu_product(product_url)
-        else:
+        try:
+            if 'temu' in store.lower() or 'temu.com' in product_url:
+                scraped = scrape_temu_product(product_url)
+            else:
+                failed += 1
+                results.append({'id': item['id'], 'status': 'unsupported_store'})
+                continue
+        except Exception as e:
             failed += 1
+            results.append({'id': item['id'], 'status': 'error', 'error': str(e)})
             continue
 
         if not scraped:
             failed += 1
+            results.append({'id': item['id'], 'status': 'no_data'})
             continue
 
         # Update item with scraped data
-        updates = {}
+        updates = {'last_checked': datetime.now().isoformat()}
+        updated_fields = []
+
         if scraped.get('image_url') and not item.get('image_url'):
             updates['image_url'] = scraped['image_url']
-        if scraped.get('price') and not item.get('current_price'):
+            updated_fields.append('image')
+        if scraped.get('price') is not None and item.get('current_price') is None:
             updates['current_price'] = scraped['price']
-        if scraped.get('title') and (not item.get('title') or item.get('title') == 'Unknown Product'):
+            updated_fields.append('price')
+        if scraped.get('title') and (not item.get('title') or item.get('title') in ['Unknown Product', '']):
             updates['title'] = scraped['title']
+            updated_fields.append('title')
 
-        if updates:
+        if updated_fields:
             Item.update(item['id'], **updates)
             refreshed += 1
-            results.append({'id': item['id'], 'status': 'updated', 'fields': list(updates.keys())})
+            results.append({'id': item['id'], 'status': 'updated', 'fields': updated_fields})
         else:
+            Item.update(item['id'], **updates)
             results.append({'id': item['id'], 'status': 'no_updates'})
+
+    total_missing = len([i for i in items if not i.get('image_url') or i.get('current_price') is None])
 
     return jsonify({
         'success': True,
         'refreshed': refreshed,
         'failed': failed,
-        'total_missing': len(missing_items),
+        'processed': len(missing_items),
+        'total_missing': total_missing,
+        'remaining': total_missing - len(missing_items),
         'results': results
     })
+
+
+@items_bp.route('/price-check', methods=['POST'])
+def check_prices():
+    """Check current prices for items and update if changed."""
+    data = request.get_json() or {}
+    item_ids = data.get('item_ids', [])
+    limit = data.get('limit', 20)
+
+    if item_ids:
+        items = [Item.get_by_id(id) for id in item_ids if Item.get_by_id(id)]
+    else:
+        # Get items that haven't been checked recently
+        all_items = Item.get_all()
+        items = sorted(all_items, key=lambda x: x.get('last_checked') or '')[:limit]
+
+    results = {
+        'checked': 0,
+        'updated': 0,
+        'price_drops': 0,
+        'price_increases': 0,
+        'failed': 0,
+        'changes': []
+    }
+
+    for item in items:
+        product_url = item.get('product_url')
+        if not product_url:
+            results['failed'] += 1
+            continue
+
+        store = item.get('store', '')
+
+        try:
+            if 'temu' in store.lower() or 'temu.com' in product_url:
+                scraped = scrape_temu_product(product_url)
+            else:
+                results['failed'] += 1
+                continue
+        except:
+            results['failed'] += 1
+            continue
+
+        results['checked'] += 1
+
+        if scraped and scraped.get('price'):
+            old_price = item.get('current_price')
+            new_price = scraped['price']
+
+            if old_price and old_price != new_price:
+                Item.update(item['id'],
+                           last_price=old_price,
+                           current_price=new_price,
+                           price_updated_at=datetime.now().isoformat(),
+                           last_checked=datetime.now().isoformat())
+
+                results['updated'] += 1
+                change = {
+                    'id': item['id'],
+                    'title': item.get('title'),
+                    'old_price': old_price,
+                    'new_price': new_price,
+                    'difference': round(new_price - old_price, 2)
+                }
+                results['changes'].append(change)
+
+                if new_price < old_price:
+                    results['price_drops'] += 1
+                else:
+                    results['price_increases'] += 1
+            else:
+                Item.update(item['id'], last_checked=datetime.now().isoformat())
+
+    return jsonify(results)
