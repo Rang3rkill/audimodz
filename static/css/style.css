@@ -612,6 +612,20 @@ form {
     background: #b91c1c;
 }
 
+.btn-warning {
+    background: #f59e0b;
+    color: white;
+}
+
+.btn-warning:hover {
+    background: #d97706;
+}
+
+.btn-warning:disabled {
+    background: #fcd34d;
+    cursor: not-allowed;
+}
+
 /* Category controls */
 .category-controls {
     margin-left: auto;
@@ -824,6 +838,43 @@ form {
     background: var(--primary-color);
     color: white;
     border-color: var(--primary-color);
+}
+
+/* Refresh button for items missing data */
+.item-card .refresh-btn {
+    position: absolute;
+    top: 8px;
+    right: 80px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    font-size: 16px;
+    background: rgba(255, 200, 100, 0.95);
+    border: 1px solid #e6a030;
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 1;
+    transition: all 0.2s ease;
+    color: #8b5a00;
+}
+
+.item-card .refresh-btn:hover {
+    background: #ffa500;
+    color: white;
+    border-color: #e69500;
+    transform: rotate(180deg);
+}
+
+.item-card .refresh-btn.refreshing {
+    animation: spin 1s linear infinite;
+}
+
+.item-card.needs-refresh {
+    box-shadow: 0 0 0 2px rgba(255, 165, 0, 0.5);
+}
+
+@keyframes spin {
+    100% { transform: rotate(360deg); }
 }
 
 /* View link on item card */
@@ -1645,6 +1696,45 @@ form {
 
 .missing-item-link:hover {
     background: var(--primary-dark);
+}
+
+.missing-item-meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.missing-what {
+    font-size: 10px;
+    color: #dc2626;
+    background: #fee2e2;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.missing-item-refresh {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid #f59e0b;
+    background: #fef3c7;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+    color: #92400e;
+    transition: all 0.2s ease;
+}
+
+.missing-item-refresh:hover {
+    background: #f59e0b;
+    color: white;
+    transform: rotate(180deg);
+}
+
+.missing-item-refresh:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
 }
 
 .no-missing {

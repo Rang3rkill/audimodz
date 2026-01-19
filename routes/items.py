@@ -1,5 +1,7 @@
 from flask import Blueprint, jsonify, request
 from models.item import Item
+import requests
+import re
 
 items_bp = Blueprint('items', __name__, url_prefix='/api/items')
 
@@ -215,4 +217,212 @@ def import_items():
         'price_drops': price_drops,
         'price_increases': price_increases,
         'items': results
+    })
+
+
+def scrape_temu_product(url):
+    """Scrape product data from a Temu product page."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        html = response.text
+
+        data = {}
+
+        # Try to extract from JSON in script tags first
+        # Look for window.__INITIAL_STATE__ or similar
+        json_patterns = [
+            r'window\.__INITIAL_STATE__\s*=\s*({.+?});?\s*</script>',
+            r'"goods_name"\s*:\s*"([^"]+)"',
+        ]
+
+        # Extract title
+        title_patterns = [
+            r'"goods_name"\s*:\s*"([^"]+)"',
+            r'"title"\s*:\s*"([^"]+)"',
+            r'<title>([^<]+)</title>',
+            r'"name"\s*:\s*"([^"]+)"',
+        ]
+        for pattern in title_patterns:
+            match = re.search(pattern, html)
+            if match:
+                title = match.group(1)
+                # Clean up escaped characters
+                title = title.encode().decode('unicode_escape') if '\\u' in title else title
+                if len(title) > 5 and len(title) < 500:
+                    data['title'] = title
+                    break
+
+        # Extract image URL
+        image_patterns = [
+            r'"thumb_url"\s*:\s*"(https?://[^"]+)"',
+            r'"image"\s*:\s*"(https?://[^"]+)"',
+            r'"img"\s*:\s*"(https?://[^"]+)"',
+            r'"goods_img"\s*:\s*"(https?://[^"]+)"',
+            r'<meta property="og:image" content="([^"]+)"',
+            r'"image_url"\s*:\s*"(https?://[^"]+)"',
+            # Look for product images in img tags
+            r'<img[^>]+src="(https://[^"]*kwcdn[^"]*)"[^>]*>',
+        ]
+        for pattern in image_patterns:
+            match = re.search(pattern, html)
+            if match:
+                img_url = match.group(1)
+                # Clean up escaped characters
+                img_url = img_url.replace('\\/', '/').replace('\\u002F', '/')
+                if 'kwcdn' in img_url or 'akamaized' in img_url or 'temu' in img_url:
+                    data['image_url'] = img_url
+                    break
+
+        # Extract price
+        price_patterns = [
+            r'"price"\s*:\s*(\d+\.?\d*)',
+            r'"sale_price"\s*:\s*(\d+\.?\d*)',
+            r'"current_price"\s*:\s*(\d+\.?\d*)',
+            r'"salePrice"\s*:\s*(\d+\.?\d*)',
+            r'\$(\d+\.?\d*)',
+        ]
+        for pattern in price_patterns:
+            match = re.search(pattern, html)
+            if match:
+                try:
+                    price = float(match.group(1))
+                    # Temu sometimes stores prices in cents
+                    if price > 1000:
+                        price = price / 100
+                    if 0 < price < 10000:
+                        data['price'] = price
+                        break
+                except ValueError:
+                    continue
+
+        return data
+
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
+        return None
+
+
+@items_bp.route('/<int:item_id>/refresh', methods=['POST'])
+def refresh_item(item_id):
+    """Refresh item data by scraping its product URL."""
+    item = Item.get_by_id(item_id)
+    if not item:
+        return jsonify({'error': 'Item not found'}), 404
+
+    product_url = item.get('product_url')
+    if not product_url:
+        return jsonify({'error': 'Item has no product URL'}), 400
+
+    store = item.get('store', '')
+
+    # Scrape based on store
+    if 'temu' in store.lower() or 'temu.com' in product_url:
+        scraped = scrape_temu_product(product_url)
+    else:
+        return jsonify({'error': f'Refresh not supported for store: {store}'}), 400
+
+    if not scraped:
+        return jsonify({'error': 'Could not fetch product data'}), 500
+
+    # Update item with scraped data
+    updates = {}
+    updated_fields = []
+
+    if scraped.get('image_url') and not item.get('image_url'):
+        updates['image_url'] = scraped['image_url']
+        updated_fields.append('image')
+
+    if scraped.get('price') and not item.get('current_price'):
+        updates['current_price'] = scraped['price']
+        updated_fields.append('price')
+
+    if scraped.get('title') and (not item.get('title') or item.get('title') == 'Unknown Product'):
+        updates['title'] = scraped['title']
+        updated_fields.append('title')
+
+    if updates:
+        updated_item = Item.update(item_id, **updates)
+        return jsonify({
+            'success': True,
+            'updated_fields': updated_fields,
+            'item': updated_item
+        })
+    else:
+        return jsonify({
+            'success': True,
+            'updated_fields': [],
+            'message': 'No missing data to update'
+        })
+
+
+@items_bp.route('/refresh-missing', methods=['POST'])
+def refresh_missing_data():
+    """Refresh all items that are missing image or price data."""
+    # Get all items missing data
+    items = Item.get_all()
+    missing_items = [
+        i for i in items
+        if not i.get('image_url') or not i.get('current_price')
+    ]
+
+    if not missing_items:
+        return jsonify({
+            'success': True,
+            'message': 'No items with missing data',
+            'refreshed': 0,
+            'failed': 0
+        })
+
+    refreshed = 0
+    failed = 0
+    results = []
+
+    for item in missing_items:
+        product_url = item.get('product_url')
+        if not product_url:
+            failed += 1
+            continue
+
+        store = item.get('store', '')
+
+        # Scrape based on store
+        if 'temu' in store.lower() or 'temu.com' in product_url:
+            scraped = scrape_temu_product(product_url)
+        else:
+            failed += 1
+            continue
+
+        if not scraped:
+            failed += 1
+            continue
+
+        # Update item with scraped data
+        updates = {}
+        if scraped.get('image_url') and not item.get('image_url'):
+            updates['image_url'] = scraped['image_url']
+        if scraped.get('price') and not item.get('current_price'):
+            updates['current_price'] = scraped['price']
+        if scraped.get('title') and (not item.get('title') or item.get('title') == 'Unknown Product'):
+            updates['title'] = scraped['title']
+
+        if updates:
+            Item.update(item['id'], **updates)
+            refreshed += 1
+            results.append({'id': item['id'], 'status': 'updated', 'fields': list(updates.keys())})
+        else:
+            results.append({'id': item['id'], 'status': 'no_updates'})
+
+    return jsonify({
+        'success': True,
+        'refreshed': refreshed,
+        'failed': failed,
+        'total_missing': len(missing_items),
+        'results': results
     })

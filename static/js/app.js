@@ -147,6 +147,7 @@ const App = {
             // Missing data
             missingCount: document.getElementById('missingCount'),
             missingDataList: document.getElementById('missingDataList'),
+            refreshMissingData: document.getElementById('refreshMissingData'),
             // Duplicates
             duplicateCount: document.getElementById('duplicateCount'),
             duplicatesList: document.getElementById('duplicatesList'),
@@ -201,6 +202,11 @@ const App = {
         // Refresh prices
         this.elements.refreshPrices?.addEventListener('click', () => {
             alert('Price refresh will be available once the Chrome extension is installed.');
+        });
+
+        // Refresh missing data (images/prices)
+        this.elements.refreshMissingData?.addEventListener('click', () => {
+            this.refreshAllMissingData();
         });
 
         // Management modals
@@ -402,12 +408,12 @@ const App = {
         }
     },
 
-    // Render items missing images in caretaker panel
+    // Render items missing images or prices in caretaker panel
     renderMissingData() {
         if (!this.elements.missingDataList) return;
 
-        // Find items without images
-        const missingItems = this.items.filter(item => !item.image_url);
+        // Find items without images OR without prices
+        const missingItems = this.items.filter(item => !item.image_url || item.current_price === null);
 
         // Update count badge
         if (this.elements.missingCount) {
@@ -417,24 +423,32 @@ const App = {
 
         if (missingItems.length === 0) {
             this.elements.missingDataList.innerHTML = `
-                <p class="no-missing">All items have images!</p>
+                <p class="no-missing">All items have complete data!</p>
             `;
             return;
         }
 
-        // Show first 20 items with missing images
+        // Show first 20 items with missing data
         const itemsToShow = missingItems.slice(0, 20);
         let html = '';
 
         for (const item of itemsToShow) {
             const storeBadge = item.store.charAt(0).toUpperCase() + item.store.slice(1);
+            const missingWhat = [];
+            if (!item.image_url) missingWhat.push('image');
+            if (item.current_price === null) missingWhat.push('price');
+
             html += `
                 <div class="missing-item" data-id="${item.id}">
                     <div class="missing-item-placeholder">?</div>
                     <div class="missing-item-info">
                         <div class="missing-item-title">${this.escapeHtml(item.title)}</div>
-                        <div class="missing-item-store">${storeBadge}</div>
+                        <div class="missing-item-meta">
+                            <span class="missing-item-store">${storeBadge}</span>
+                            <span class="missing-what">Missing: ${missingWhat.join(', ')}</span>
+                        </div>
                     </div>
+                    <button class="missing-item-refresh" data-id="${item.id}" title="Fetch data from product page">&#8635;</button>
                     <a href="${item.product_url}" target="_blank" class="missing-item-link" title="View on ${storeBadge}">
                         View
                     </a>
@@ -449,6 +463,38 @@ const App = {
         }
 
         this.elements.missingDataList.innerHTML = html;
+
+        // Bind refresh buttons
+        this.elements.missingDataList.querySelectorAll('.missing-item-refresh').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const itemId = parseInt(btn.dataset.id);
+                btn.innerHTML = '&#8987;';
+                btn.disabled = true;
+
+                try {
+                    const result = await this.api(`/api/items/${itemId}/refresh`, { method: 'POST' });
+                    if (result.success && result.updated_fields.length > 0) {
+                        // Update local item
+                        const item = this.items.find(i => i.id === itemId);
+                        if (item && result.item) {
+                            Object.assign(item, result.item);
+                        }
+                        this.renderItems();
+                        this.renderMissingData();
+                        this.showToast(`Updated: ${result.updated_fields.join(', ')}`, 'success');
+                    } else {
+                        this.showToast('No data found', 'warning');
+                        btn.innerHTML = '&#8635;';
+                        btn.disabled = false;
+                    }
+                } catch (error) {
+                    this.showToast('Refresh failed', 'error');
+                    btn.innerHTML = '&#8635;';
+                    btn.disabled = false;
+                }
+            });
+        });
     },
 
     // Render stats in caretaker panel
@@ -1107,12 +1153,19 @@ const App = {
             ? `<a href="${item.product_url}" target="_blank" class="view-link" title="View on ${storeName}">&#128279;</a>`
             : '';
 
+        // Refresh button for items missing data
+        const needsRefresh = !item.image_url || item.current_price === null;
+        const refreshBtn = needsRefresh && item.product_url
+            ? `<button class="refresh-btn" data-id="${item.id}" title="Fetch missing data from product page">&#8635;</button>`
+            : '';
+
         return `
-            <div class="item-card" data-id="${item.id}" draggable="true">
+            <div class="item-card ${needsRefresh ? 'needs-refresh' : ''}" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
                     ${imageHtml}
                     <button class="favorite-btn ${favoriteActive}" data-id="${item.id}" title="Favorite">${favoriteIcon}</button>
                     ${viewLink}
+                    ${refreshBtn}
                     <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}
@@ -1159,6 +1212,15 @@ const App = {
                 e.stopPropagation();
                 const itemId = parseInt(btn.dataset.id);
                 this.showEditItemModal(itemId);
+            });
+        });
+
+        // Refresh buttons (for items missing data)
+        this.elements.itemsGrid.querySelectorAll('.refresh-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemId = parseInt(btn.dataset.id);
+                this.refreshItemData(itemId, btn);
             });
         });
 
@@ -1209,6 +1271,94 @@ const App = {
         // Update local state
         item.is_favorite = newValue;
         await this.loadStats();
+    },
+
+    // Refresh item data from product URL
+    async refreshItemData(itemId, btn) {
+        const item = this.items.find(i => i.id === itemId);
+        if (!item) return;
+
+        // Show loading state
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '&#8987;'; // Hourglass
+        btn.disabled = true;
+        btn.classList.add('refreshing');
+
+        try {
+            const result = await this.api(`/api/items/${itemId}/refresh`, {
+                method: 'POST',
+            });
+
+            if (result.success && result.updated_fields.length > 0) {
+                // Update local item with new data
+                if (result.item) {
+                    Object.assign(item, result.item);
+                }
+
+                // Re-render the items to show updated data
+                this.renderItems();
+
+                // Show success toast
+                this.showToast(`Updated: ${result.updated_fields.join(', ')}`, 'success');
+            } else {
+                this.showToast('No new data found on product page', 'warning');
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+                btn.classList.remove('refreshing');
+            }
+        } catch (error) {
+            console.error('Refresh failed:', error);
+            this.showToast('Failed to refresh item data', 'error');
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            btn.classList.remove('refreshing');
+        }
+    },
+
+    // Refresh all items missing data (bulk refresh)
+    async refreshAllMissingData() {
+        const btn = this.elements.refreshMissingData;
+        if (!btn) return;
+
+        // Count items missing data
+        const missingItems = this.items.filter(i => !i.image_url || i.current_price === null);
+        if (missingItems.length === 0) {
+            this.showToast('All items have complete data!', 'success');
+            return;
+        }
+
+        // Confirm
+        if (!confirm(`Refresh data for ${missingItems.length} items?\n\nThis may take a while as each product page needs to be fetched.`)) {
+            return;
+        }
+
+        // Show loading state
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = `<span class="spinner">&#8987;</span> Refreshing...`;
+        btn.disabled = true;
+
+        try {
+            const result = await this.api('/api/items/refresh-missing', {
+                method: 'POST',
+            });
+
+            // Reload items to show updated data
+            await this.loadItems();
+            this.renderMissingData();
+
+            // Show result
+            if (result.refreshed > 0) {
+                this.showToast(`Updated ${result.refreshed} items, ${result.failed} failed`, 'success');
+            } else {
+                this.showToast('Could not find new data for any items', 'warning');
+            }
+        } catch (error) {
+            console.error('Bulk refresh failed:', error);
+            this.showToast('Failed to refresh items', 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
     },
 
     // Adjust item quantity
