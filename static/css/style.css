@@ -1092,12 +1092,12 @@ form {
     gap: 12px;
 }
 
-.caretaker-icon {
+.settings-icon {
     margin-right: 6px;
 }
 
-/* Caretaker Panel */
-.caretaker-panel {
+/* Settings Panel */
+.settings-panel {
     position: fixed;
     top: 0;
     right: 0;
@@ -1111,12 +1111,12 @@ form {
     transition: transform 0.3s ease;
 }
 
-.caretaker-panel.hidden {
+.settings-panel.hidden {
     transform: translateX(100%);
     display: block !important;
 }
 
-.caretaker-header {
+.settings-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1127,29 +1127,29 @@ form {
     top: 0;
 }
 
-.caretaker-header h2 {
+.settings-header h2 {
     margin: 0;
     font-size: 20px;
 }
 
-.caretaker-header .close-btn {
+.settings-header .close-btn {
     color: white;
     background: rgba(255, 255, 255, 0.2);
 }
 
-.caretaker-header .close-btn:hover {
+.settings-header .close-btn:hover {
     background: rgba(255, 255, 255, 0.3);
 }
 
-.caretaker-content {
+.settings-content {
     padding: 20px;
 }
 
-.caretaker-section {
+.settings-section {
     margin-bottom: 24px;
 }
 
-.caretaker-section h3 {
+.settings-section h3 {
     font-size: 14px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
@@ -1454,7 +1454,7 @@ form {
         font-size: 18px;
     }
 
-    .caretaker-panel {
+    .settings-panel {
         width: 100%;
     }
 
@@ -2174,7 +2174,7 @@ form {
     background: #fef2f2;
 }
 
-/* Balance section in caretaker */
+/* Balance section in settings */
 .balance-section {
     background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
     border-radius: 12px;

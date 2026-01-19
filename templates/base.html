@@ -17,8 +17,8 @@
             <button id="viewToggle" class="btn btn-icon" title="Toggle view">
                 <span id="viewIcon">&#9638;</span>
             </button>
-            <button id="caretakerToggle" class="btn btn-secondary btn-small">
-                <span class="caretaker-icon">&#9881;</span> Caretaker
+            <button id="settingsToggle" class="btn btn-secondary btn-small">
+                <span class="settings-icon">&#9881;</span> Settings
             </button>
         </div>
     </header>
@@ -47,13 +47,13 @@
         </div>
     </div>
 
-    <!-- Caretaker Panel (slides in from right) -->
-    <aside id="caretakerPanel" class="caretaker-panel hidden">
-        <div class="caretaker-header">
-            <h2>Caretaker Tools</h2>
-            <button id="closeCaretaker" class="close-btn">&times;</button>
+    <!-- Settings Panel (slides in from right) -->
+    <aside id="settingsPanel" class="settings-panel hidden">
+        <div class="settings-header">
+            <h2>Settings</h2>
+            <button id="closeSettings" class="close-btn">&times;</button>
         </div>
-        <div class="caretaker-content">
+        <div class="settings-content">
             <!-- Dashboard Stats -->
             <div class="dashboard-section">
                 <h3>Dashboard</h3>
@@ -79,7 +79,7 @@
             </div>
 
             <!-- Balance Display (for Judi) -->
-            <div class="caretaker-section balance-section">
+            <div class="settings-section balance-section">
                 <h3>Judi's Available Balance</h3>
                 <p class="section-desc">This shows in the app so Judi knows how much she can spend.</p>
                 <div class="balance-input-row">
@@ -98,7 +98,7 @@
             </div>
 
             <!-- Budget Tracker -->
-            <div class="caretaker-section budget-section">
+            <div class="settings-section budget-section">
                 <h3>Budget Tracker</h3>
                 <div class="budget-input-row">
                     <label for="budgetInput">Monthly Budget:</label>
@@ -120,7 +120,7 @@
             </div>
 
             <!-- Quick Actions -->
-            <div class="caretaker-section">
+            <div class="settings-section">
                 <h3>Quick Actions</h3>
                 <div class="action-buttons">
                     <button id="refreshMissingData" class="btn btn-warning btn-block">
@@ -145,7 +145,7 @@
             </div>
 
             <!-- Recent Activity -->
-            <div class="caretaker-section">
+            <div class="settings-section">
                 <h3>Activity</h3>
                 <div class="activity-info">
                     <div class="activity-row">
@@ -168,7 +168,7 @@
             </div>
 
             <!-- Items Missing Data -->
-            <div class="caretaker-section missing-data-section">
+            <div class="settings-section missing-data-section">
                 <h3>
                     Missing Images
                     <span class="missing-count" id="missingCount"></span>
@@ -178,7 +178,7 @@
             </div>
 
             <!-- Potential Duplicates -->
-            <div class="caretaker-section duplicates-section">
+            <div class="settings-section duplicates-section">
                 <h3>
                     Potential Duplicates
                     <span class="duplicate-count" id="duplicateCount"></span>
@@ -189,7 +189,7 @@
             </div>
 
             <!-- Tips -->
-            <div class="caretaker-section tips-section">
+            <div class="settings-section tips-section">
                 <h3>Tips for Judi</h3>
                 <ul class="tips-list">
                     <li>Tap the <strong>heart</strong> to mark favorites</li>

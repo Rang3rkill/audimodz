@@ -118,10 +118,10 @@ const App = {
             confirmDeleteMessage: document.getElementById('confirmDeleteMessage'),
             confirmDeleteCancel: document.getElementById('confirmDeleteCancel'),
             confirmDeleteConfirm: document.getElementById('confirmDeleteConfirm'),
-            // Caretaker panel
-            caretakerToggle: document.getElementById('caretakerToggle'),
-            caretakerPanel: document.getElementById('caretakerPanel'),
-            closeCaretaker: document.getElementById('closeCaretaker'),
+            // Settings panel
+            settingsToggle: document.getElementById('settingsToggle'),
+            settingsPanel: document.getElementById('settingsPanel'),
+            closeSettings: document.getElementById('closeSettings'),
             // Stats elements
             statTotalItems: document.getElementById('statTotalItems'),
             statTotalValue: document.getElementById('statTotalValue'),
@@ -130,7 +130,7 @@ const App = {
             statRecentlyAdded: document.getElementById('statRecentlyAdded'),
             statFavorites: document.getElementById('statFavorites'),
             storeStats: document.getElementById('storeStats'),
-            // Caretaker action buttons
+            // Settings panel action buttons
             manageCategoriesBtn2: document.getElementById('manageCategoriesBtn2'),
             manageListsBtn2: document.getElementById('manageListsBtn2'),
             // Search
@@ -275,7 +275,7 @@ const App = {
             this.showManageListsModal();
         });
 
-        // Caretaker panel buttons (duplicates in panel)
+        // Settings panel buttons (duplicates in panel)
         this.elements.manageCategoriesBtn2?.addEventListener('click', () => {
             this.showManageCategoriesModal();
         });
@@ -284,13 +284,13 @@ const App = {
             this.showManageListsModal();
         });
 
-        // Caretaker panel toggle
-        this.elements.caretakerToggle?.addEventListener('click', () => {
-            this.toggleCaretakerPanel();
+        // Settings panel toggle
+        this.elements.settingsToggle?.addEventListener('click', () => {
+            this.toggleSettingsPanel();
         });
 
-        this.elements.closeCaretaker?.addEventListener('click', () => {
-            this.hideCaretakerPanel();
+        this.elements.closeSettings?.addEventListener('click', () => {
+            this.hideSettingsPanel();
         });
 
         // Search functionality
@@ -465,7 +465,7 @@ const App = {
         }
     },
 
-    // Render items missing images or prices in caretaker panel
+    // Render items missing images or prices in settings panel
     renderMissingData() {
         if (!this.elements.missingDataList) return;
 
@@ -554,7 +554,7 @@ const App = {
         });
     },
 
-    // Render stats in caretaker panel
+    // Render stats in settings panel
     renderStats() {
         if (!this.stats) return;
 
@@ -608,17 +608,17 @@ const App = {
         }
     },
 
-    // Caretaker panel
-    toggleCaretakerPanel() {
-        this.elements.caretakerPanel?.classList.toggle('hidden');
-        if (!this.elements.caretakerPanel?.classList.contains('hidden')) {
+    // Settings panel
+    toggleSettingsPanel() {
+        this.elements.settingsPanel?.classList.toggle('hidden');
+        if (!this.elements.settingsPanel?.classList.contains('hidden')) {
             this.loadStats();
             this.loadDuplicates();
         }
     },
 
-    hideCaretakerPanel() {
-        this.elements.caretakerPanel?.classList.add('hidden');
+    hideSettingsPanel() {
+        this.elements.settingsPanel?.classList.add('hidden');
     },
 
     // Search functionality
