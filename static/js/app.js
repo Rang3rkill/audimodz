@@ -19,6 +19,12 @@ const App = {
     breakRemindersEnabled: true,
     lastBreakReminder: Date.now(),
     breakSnoozed: false,
+    // Filter and sort state
+    currentFilter: 'all', // 'all', 'favorites', 'price-drops', 'missing', 'ready'
+    currentSort: 'position', // 'position', 'price-asc', 'price-desc', 'date-asc', 'date-desc', 'title-asc'
+    // Selection mode
+    selectMode: false,
+    selectedItems: new Set(),
 
     // DOM Elements
     elements: {},
@@ -112,10 +118,10 @@ const App = {
             confirmDeleteMessage: document.getElementById('confirmDeleteMessage'),
             confirmDeleteCancel: document.getElementById('confirmDeleteCancel'),
             confirmDeleteConfirm: document.getElementById('confirmDeleteConfirm'),
-            // Caretaker panel
-            caretakerToggle: document.getElementById('caretakerToggle'),
-            caretakerPanel: document.getElementById('caretakerPanel'),
-            closeCaretaker: document.getElementById('closeCaretaker'),
+            // Settings panel
+            settingsToggle: document.getElementById('settingsToggle'),
+            settingsPanel: document.getElementById('settingsPanel'),
+            closeSettings: document.getElementById('closeSettings'),
             // Stats elements
             statTotalItems: document.getElementById('statTotalItems'),
             statTotalValue: document.getElementById('statTotalValue'),
@@ -124,7 +130,7 @@ const App = {
             statRecentlyAdded: document.getElementById('statRecentlyAdded'),
             statFavorites: document.getElementById('statFavorites'),
             storeStats: document.getElementById('storeStats'),
-            // Caretaker action buttons
+            // Settings panel action buttons
             manageCategoriesBtn2: document.getElementById('manageCategoriesBtn2'),
             manageListsBtn2: document.getElementById('manageListsBtn2'),
             // Search
@@ -147,6 +153,7 @@ const App = {
             // Missing data
             missingCount: document.getElementById('missingCount'),
             missingDataList: document.getElementById('missingDataList'),
+            refreshMissingData: document.getElementById('refreshMissingData'),
             // Duplicates
             duplicateCount: document.getElementById('duplicateCount'),
             duplicatesList: document.getElementById('duplicatesList'),
@@ -162,6 +169,24 @@ const App = {
             dismissBreak: document.getElementById('dismissBreak'),
             snoozeBreak: document.getElementById('snoozeBreak'),
             breakRemindersEnabled: document.getElementById('breakRemindersEnabled'),
+            // Filter toolbar
+            filterToolbar: document.getElementById('filterToolbar'),
+            sortSelect: document.getElementById('sortSelect'),
+            selectModeBtn: document.getElementById('selectModeBtn'),
+            missingFilterCount: document.getElementById('missingFilterCount'),
+            // Batch bar
+            batchBar: document.getElementById('batchBar'),
+            selectedCount: document.getElementById('selectedCount'),
+            selectAllBtn: document.getElementById('selectAllBtn'),
+            deselectAllBtn: document.getElementById('deselectAllBtn'),
+            batchAddToCart: document.getElementById('batchAddToCart'),
+            batchFavorite: document.getElementById('batchFavorite'),
+            batchMove: document.getElementById('batchMove'),
+            batchDelete: document.getElementById('batchDelete'),
+            exitSelectMode: document.getElementById('exitSelectMode'),
+            // Export and price check
+            exportDataBtn: document.getElementById('exportDataBtn'),
+            priceCheckBtn: document.getElementById('priceCheckBtn'),
         };
     },
 
@@ -203,6 +228,44 @@ const App = {
             alert('Price refresh will be available once the Chrome extension is installed.');
         });
 
+        // Refresh missing data (images/prices)
+        this.elements.refreshMissingData?.addEventListener('click', () => {
+            this.refreshAllMissingData();
+        });
+
+        // Filter chips
+        document.querySelectorAll('.filter-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                this.setFilter(chip.dataset.filter);
+            });
+        });
+
+        // Sort dropdown
+        this.elements.sortSelect?.addEventListener('change', () => {
+            this.currentSort = this.elements.sortSelect.value;
+            this.applyFiltersAndSort();
+        });
+
+        // Select mode toggle
+        this.elements.selectModeBtn?.addEventListener('click', () => {
+            this.toggleSelectMode();
+        });
+
+        // Batch action buttons
+        this.elements.selectAllBtn?.addEventListener('click', () => this.selectAllItems());
+        this.elements.deselectAllBtn?.addEventListener('click', () => this.deselectAllItems());
+        this.elements.exitSelectMode?.addEventListener('click', () => this.toggleSelectMode(false));
+        this.elements.batchAddToCart?.addEventListener('click', () => this.batchAction('toggle_ready', true));
+        this.elements.batchFavorite?.addEventListener('click', () => this.batchAction('toggle_favorite', true));
+        this.elements.batchDelete?.addEventListener('click', () => this.batchDelete());
+        this.elements.batchMove?.addEventListener('click', () => this.showBatchMoveModal());
+
+        // Export button
+        this.elements.exportDataBtn?.addEventListener('click', () => this.exportData());
+
+        // Price check button
+        this.elements.priceCheckBtn?.addEventListener('click', () => this.checkPrices());
+
         // Management modals
         this.elements.manageCategoriesBtn?.addEventListener('click', () => {
             this.showManageCategoriesModal();
@@ -212,7 +275,7 @@ const App = {
             this.showManageListsModal();
         });
 
-        // Caretaker panel buttons (duplicates in panel)
+        // Settings panel buttons (duplicates in panel)
         this.elements.manageCategoriesBtn2?.addEventListener('click', () => {
             this.showManageCategoriesModal();
         });
@@ -221,13 +284,13 @@ const App = {
             this.showManageListsModal();
         });
 
-        // Caretaker panel toggle
-        this.elements.caretakerToggle?.addEventListener('click', () => {
-            this.toggleCaretakerPanel();
+        // Settings panel toggle
+        this.elements.settingsToggle?.addEventListener('click', () => {
+            this.toggleSettingsPanel();
         });
 
-        this.elements.closeCaretaker?.addEventListener('click', () => {
-            this.hideCaretakerPanel();
+        this.elements.closeSettings?.addEventListener('click', () => {
+            this.hideSettingsPanel();
         });
 
         // Search functionality
@@ -402,12 +465,12 @@ const App = {
         }
     },
 
-    // Render items missing images in caretaker panel
+    // Render items missing images or prices in settings panel
     renderMissingData() {
         if (!this.elements.missingDataList) return;
 
-        // Find items without images
-        const missingItems = this.items.filter(item => !item.image_url);
+        // Find items without images OR without prices
+        const missingItems = this.items.filter(item => !item.image_url || item.current_price === null);
 
         // Update count badge
         if (this.elements.missingCount) {
@@ -417,24 +480,32 @@ const App = {
 
         if (missingItems.length === 0) {
             this.elements.missingDataList.innerHTML = `
-                <p class="no-missing">All items have images!</p>
+                <p class="no-missing">All items have complete data!</p>
             `;
             return;
         }
 
-        // Show first 20 items with missing images
+        // Show first 20 items with missing data
         const itemsToShow = missingItems.slice(0, 20);
         let html = '';
 
         for (const item of itemsToShow) {
             const storeBadge = item.store.charAt(0).toUpperCase() + item.store.slice(1);
+            const missingWhat = [];
+            if (!item.image_url) missingWhat.push('image');
+            if (item.current_price === null) missingWhat.push('price');
+
             html += `
                 <div class="missing-item" data-id="${item.id}">
                     <div class="missing-item-placeholder">?</div>
                     <div class="missing-item-info">
                         <div class="missing-item-title">${this.escapeHtml(item.title)}</div>
-                        <div class="missing-item-store">${storeBadge}</div>
+                        <div class="missing-item-meta">
+                            <span class="missing-item-store">${storeBadge}</span>
+                            <span class="missing-what">Missing: ${missingWhat.join(', ')}</span>
+                        </div>
                     </div>
+                    <button class="missing-item-refresh" data-id="${item.id}" title="Fetch data from product page">&#8635;</button>
                     <a href="${item.product_url}" target="_blank" class="missing-item-link" title="View on ${storeBadge}">
                         View
                     </a>
@@ -449,9 +520,41 @@ const App = {
         }
 
         this.elements.missingDataList.innerHTML = html;
+
+        // Bind refresh buttons
+        this.elements.missingDataList.querySelectorAll('.missing-item-refresh').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const itemId = parseInt(btn.dataset.id);
+                btn.innerHTML = '&#8987;';
+                btn.disabled = true;
+
+                try {
+                    const result = await this.api(`/api/items/${itemId}/refresh`, { method: 'POST' });
+                    if (result.success && result.updated_fields.length > 0) {
+                        // Update local item
+                        const item = this.items.find(i => i.id === itemId);
+                        if (item && result.item) {
+                            Object.assign(item, result.item);
+                        }
+                        this.renderItems();
+                        this.renderMissingData();
+                        this.showToast(`Updated: ${result.updated_fields.join(', ')}`, 'success');
+                    } else {
+                        this.showToast('No data found', 'warning');
+                        btn.innerHTML = '&#8635;';
+                        btn.disabled = false;
+                    }
+                } catch (error) {
+                    this.showToast('Refresh failed', 'error');
+                    btn.innerHTML = '&#8635;';
+                    btn.disabled = false;
+                }
+            });
+        });
     },
 
-    // Render stats in caretaker panel
+    // Render stats in settings panel
     renderStats() {
         if (!this.stats) return;
 
@@ -505,17 +608,17 @@ const App = {
         }
     },
 
-    // Caretaker panel
-    toggleCaretakerPanel() {
-        this.elements.caretakerPanel?.classList.toggle('hidden');
-        if (!this.elements.caretakerPanel?.classList.contains('hidden')) {
+    // Settings panel
+    toggleSettingsPanel() {
+        this.elements.settingsPanel?.classList.toggle('hidden');
+        if (!this.elements.settingsPanel?.classList.contains('hidden')) {
             this.loadStats();
             this.loadDuplicates();
         }
     },
 
-    hideCaretakerPanel() {
-        this.elements.caretakerPanel?.classList.add('hidden');
+    hideSettingsPanel() {
+        this.elements.settingsPanel?.classList.add('hidden');
     },
 
     // Search functionality
@@ -1107,12 +1210,24 @@ const App = {
             ? `<a href="${item.product_url}" target="_blank" class="view-link" title="View on ${storeName}">&#128279;</a>`
             : '';
 
+        // Refresh button for items missing data
+        const needsRefresh = !item.image_url || item.current_price === null;
+        const refreshBtn = needsRefresh && item.product_url
+            ? `<button class="refresh-btn" data-id="${item.id}" title="Fetch missing data from product page">&#8635;</button>`
+            : '';
+
+        // Select indicator for batch mode
+        const isSelected = this.selectedItems.has(item.id);
+        const selectIndicator = `<div class="select-indicator">${isSelected ? '&#10003;' : ''}</div>`;
+
         return `
-            <div class="item-card" data-id="${item.id}" draggable="true">
+            <div class="item-card ${needsRefresh ? 'needs-refresh' : ''} ${isSelected ? 'selected' : ''}" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
+                    ${selectIndicator}
                     ${imageHtml}
                     <button class="favorite-btn ${favoriteActive}" data-id="${item.id}" title="Favorite">${favoriteIcon}</button>
                     ${viewLink}
+                    ${refreshBtn}
                     <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}
@@ -1162,6 +1277,15 @@ const App = {
             });
         });
 
+        // Refresh buttons (for items missing data)
+        this.elements.itemsGrid.querySelectorAll('.refresh-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const itemId = parseInt(btn.dataset.id);
+                this.refreshItemData(itemId, btn);
+            });
+        });
+
         // Quick quantity buttons
         this.elements.itemsGrid.querySelectorAll('.qty-minus').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -1179,10 +1303,30 @@ const App = {
             });
         });
 
-        // Drag and drop
+        // Drag and drop + Select mode clicks
         const cards = this.elements.itemsGrid.querySelectorAll('.item-card');
         cards.forEach(card => {
-            card.addEventListener('dragstart', (e) => this.handleDragStart(e, card));
+            // Click handler for select mode
+            card.addEventListener('click', (e) => {
+                if (this.selectMode) {
+                    // In select mode, clicking card toggles selection
+                    // But ignore clicks on buttons/inputs
+                    if (e.target.closest('button') || e.target.closest('input') || e.target.closest('a')) {
+                        return;
+                    }
+                    const itemId = parseInt(card.dataset.id);
+                    this.toggleItemSelection(itemId);
+                }
+            });
+
+            // Drag and drop handlers
+            card.addEventListener('dragstart', (e) => {
+                if (this.selectMode) {
+                    e.preventDefault();
+                    return;
+                }
+                this.handleDragStart(e, card);
+            });
             card.addEventListener('dragend', (e) => this.handleDragEnd(e, card));
             card.addEventListener('dragover', (e) => this.handleDragOver(e, card));
             card.addEventListener('dragleave', (e) => this.handleDragLeave(e, card));
@@ -1209,6 +1353,94 @@ const App = {
         // Update local state
         item.is_favorite = newValue;
         await this.loadStats();
+    },
+
+    // Refresh item data from product URL
+    async refreshItemData(itemId, btn) {
+        const item = this.items.find(i => i.id === itemId);
+        if (!item) return;
+
+        // Show loading state
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '&#8987;'; // Hourglass
+        btn.disabled = true;
+        btn.classList.add('refreshing');
+
+        try {
+            const result = await this.api(`/api/items/${itemId}/refresh`, {
+                method: 'POST',
+            });
+
+            if (result.success && result.updated_fields.length > 0) {
+                // Update local item with new data
+                if (result.item) {
+                    Object.assign(item, result.item);
+                }
+
+                // Re-render the items to show updated data
+                this.renderItems();
+
+                // Show success toast
+                this.showToast(`Updated: ${result.updated_fields.join(', ')}`, 'success');
+            } else {
+                this.showToast('No new data found on product page', 'warning');
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+                btn.classList.remove('refreshing');
+            }
+        } catch (error) {
+            console.error('Refresh failed:', error);
+            this.showToast('Failed to refresh item data', 'error');
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            btn.classList.remove('refreshing');
+        }
+    },
+
+    // Refresh all items missing data (bulk refresh)
+    async refreshAllMissingData() {
+        const btn = this.elements.refreshMissingData;
+        if (!btn) return;
+
+        // Count items missing data
+        const missingItems = this.items.filter(i => !i.image_url || i.current_price === null);
+        if (missingItems.length === 0) {
+            this.showToast('All items have complete data!', 'success');
+            return;
+        }
+
+        // Confirm
+        if (!confirm(`Refresh data for ${missingItems.length} items?\n\nThis may take a while as each product page needs to be fetched.`)) {
+            return;
+        }
+
+        // Show loading state
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = `<span class="spinner">&#8987;</span> Refreshing...`;
+        btn.disabled = true;
+
+        try {
+            const result = await this.api('/api/items/refresh-missing', {
+                method: 'POST',
+            });
+
+            // Reload items to show updated data
+            await this.loadItems();
+            this.renderMissingData();
+
+            // Show result
+            if (result.refreshed > 0) {
+                this.showToast(`Updated ${result.refreshed} items, ${result.failed} failed`, 'success');
+            } else {
+                this.showToast('Could not find new data for any items', 'warning');
+            }
+        } catch (error) {
+            console.error('Bulk refresh failed:', error);
+            this.showToast('Failed to refresh items', 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
     },
 
     // Adjust item quantity
@@ -1891,6 +2123,334 @@ const App = {
             await this.loadStats();
         } catch (error) {
             alert('Error deleting item');
+        }
+    },
+
+    // ==========================================
+    // FILTER AND SORT METHODS
+    // ==========================================
+
+    setFilter(filter) {
+        this.currentFilter = filter;
+
+        // Update filter chip UI
+        document.querySelectorAll('.filter-chip').forEach(chip => {
+            chip.classList.toggle('active', chip.dataset.filter === filter);
+        });
+
+        this.applyFiltersAndSort();
+    },
+
+    applyFiltersAndSort() {
+        let items = [...this.items];
+
+        // Apply filter
+        switch (this.currentFilter) {
+            case 'favorites':
+                items = items.filter(i => i.is_favorite);
+                break;
+            case 'price-drops':
+                items = items.filter(i => i.last_price && i.current_price && i.current_price < i.last_price);
+                break;
+            case 'missing':
+                items = items.filter(i => !i.image_url || i.current_price === null);
+                break;
+            case 'ready':
+                items = items.filter(i => i.in_ready_to_buy);
+                break;
+            // 'all' shows everything
+        }
+
+        // Apply sort
+        switch (this.currentSort) {
+            case 'price-asc':
+                items.sort((a, b) => (a.current_price || 999999) - (b.current_price || 999999));
+                break;
+            case 'price-desc':
+                items.sort((a, b) => (b.current_price || 0) - (a.current_price || 0));
+                break;
+            case 'date-desc':
+                items.sort((a, b) => (b.date_added || '').localeCompare(a.date_added || ''));
+                break;
+            case 'date-asc':
+                items.sort((a, b) => (a.date_added || '').localeCompare(b.date_added || ''));
+                break;
+            case 'title-asc':
+                items.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+                break;
+            // 'position' is default, already sorted from API
+        }
+
+        this.filteredItems = items;
+        this.renderFilteredItems();
+        this.updateFilterCounts();
+    },
+
+    renderFilteredItems() {
+        if (this.filteredItems.length === 0) {
+            this.elements.itemsGrid.innerHTML = `
+                <div class="empty-state">
+                    <p>No items match the current filter.</p>
+                    <button class="btn btn-secondary" onclick="App.setFilter('all')">Show All Items</button>
+                </div>
+            `;
+            return;
+        }
+
+        let html = '';
+        for (const item of this.filteredItems) {
+            html += this.renderItemCard(item);
+        }
+        this.elements.itemsGrid.innerHTML = html;
+
+        // Re-bind events
+        this.bindItemEvents();
+
+        // Apply select mode if active
+        if (this.selectMode) {
+            this.elements.itemsGrid.classList.add('select-mode');
+            this.updateSelectedUI();
+        }
+    },
+
+    updateFilterCounts() {
+        // Update missing data count in filter chip
+        const missingCount = this.items.filter(i => !i.image_url || i.current_price === null).length;
+        if (this.elements.missingFilterCount) {
+            this.elements.missingFilterCount.textContent = missingCount > 0 ? `(${missingCount})` : '';
+        }
+    },
+
+    // ==========================================
+    // SELECT MODE AND BATCH OPERATIONS
+    // ==========================================
+
+    toggleSelectMode(enable = null) {
+        this.selectMode = enable !== null ? enable : !this.selectMode;
+
+        // Update UI
+        this.elements.itemsGrid.classList.toggle('select-mode', this.selectMode);
+        this.elements.batchBar?.classList.toggle('hidden', !this.selectMode);
+        this.elements.selectModeBtn?.classList.toggle('active', this.selectMode);
+
+        if (!this.selectMode) {
+            this.selectedItems.clear();
+            this.updateSelectedUI();
+        }
+
+        // Re-render to add/remove select indicators
+        this.applyFiltersAndSort();
+    },
+
+    toggleItemSelection(itemId) {
+        if (this.selectedItems.has(itemId)) {
+            this.selectedItems.delete(itemId);
+        } else {
+            this.selectedItems.add(itemId);
+        }
+        this.updateSelectedUI();
+    },
+
+    selectAllItems() {
+        this.filteredItems.forEach(item => {
+            this.selectedItems.add(item.id);
+        });
+        this.updateSelectedUI();
+    },
+
+    deselectAllItems() {
+        this.selectedItems.clear();
+        this.updateSelectedUI();
+    },
+
+    updateSelectedUI() {
+        // Update count display
+        if (this.elements.selectedCount) {
+            this.elements.selectedCount.textContent = this.selectedItems.size;
+        }
+
+        // Update card visual states
+        this.elements.itemsGrid.querySelectorAll('.item-card').forEach(card => {
+            const id = parseInt(card.dataset.id);
+            card.classList.toggle('selected', this.selectedItems.has(id));
+
+            // Update select indicator
+            const indicator = card.querySelector('.select-indicator');
+            if (indicator) {
+                indicator.innerHTML = this.selectedItems.has(id) ? '&#10003;' : '';
+            }
+        });
+    },
+
+    async batchAction(operation, value) {
+        if (this.selectedItems.size === 0) {
+            this.showToast('No items selected', 'warning');
+            return;
+        }
+
+        try {
+            const result = await this.api('/api/items/batch', {
+                method: 'POST',
+                body: JSON.stringify({
+                    operation: operation,
+                    item_ids: Array.from(this.selectedItems),
+                    value: value
+                })
+            });
+
+            this.showToast(`Updated ${result.success} items`, 'success');
+
+            // Reload and exit select mode
+            await this.loadItems();
+            this.toggleSelectMode(false);
+
+        } catch (error) {
+            this.showToast('Batch operation failed', 'error');
+        }
+    },
+
+    async batchDelete() {
+        if (this.selectedItems.size === 0) {
+            this.showToast('No items selected', 'warning');
+            return;
+        }
+
+        if (!confirm(`Delete ${this.selectedItems.size} selected items?\n\nThis cannot be undone.`)) {
+            return;
+        }
+
+        try {
+            const result = await this.api('/api/items/batch', {
+                method: 'POST',
+                body: JSON.stringify({
+                    operation: 'delete',
+                    item_ids: Array.from(this.selectedItems)
+                })
+            });
+
+            this.showToast(`Deleted ${result.success} items`, 'success');
+
+            // Reload and exit select mode
+            await this.loadItems();
+            await this.loadStats();
+            this.toggleSelectMode(false);
+
+        } catch (error) {
+            this.showToast('Delete failed', 'error');
+        }
+    },
+
+    showBatchMoveModal() {
+        if (this.selectedItems.size === 0) {
+            this.showToast('No items selected', 'warning');
+            return;
+        }
+
+        // Simple prompt for now - could make a modal later
+        const listOptions = this.lists.map(l => `${l.id}: ${l.name}`).join('\n');
+        const listId = prompt(`Move ${this.selectedItems.size} items to which list?\n\n${listOptions}\n\nEnter list ID:`);
+
+        if (listId && !isNaN(parseInt(listId))) {
+            this.batchMoveToList(parseInt(listId));
+        }
+    },
+
+    async batchMoveToList(listId) {
+        try {
+            const result = await this.api('/api/items/batch', {
+                method: 'POST',
+                body: JSON.stringify({
+                    operation: 'move_to_list',
+                    item_ids: Array.from(this.selectedItems),
+                    list_id: listId
+                })
+            });
+
+            this.showToast(`Moved ${result.success} items`, 'success');
+
+            await this.loadItems();
+            this.toggleSelectMode(false);
+
+        } catch (error) {
+            this.showToast('Move failed', 'error');
+        }
+    },
+
+    // ==========================================
+    // EXPORT AND PRICE CHECK
+    // ==========================================
+
+    async exportData() {
+        const format = prompt('Export format:\n1. JSON\n2. CSV\n\nEnter 1 or 2:', '1');
+
+        if (!format) return;
+
+        const formatType = format === '2' ? 'csv' : 'json';
+        const url = `/api/items/export?format=${formatType}`;
+
+        if (formatType === 'csv') {
+            // Download CSV directly
+            window.location.href = url;
+            this.showToast('Exporting CSV...', 'success');
+        } else {
+            // Show JSON in new tab or download
+            try {
+                const data = await this.api(url);
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const downloadUrl = URL.createObjectURL(blob);
+
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = `wishlist_export_${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+
+                URL.revokeObjectURL(downloadUrl);
+                this.showToast(`Exported ${data.count} items`, 'success');
+            } catch (error) {
+                this.showToast('Export failed', 'error');
+            }
+        }
+    },
+
+    async checkPrices() {
+        if (!confirm('Check prices for all items?\n\nThis will compare current prices with Temu and update any changes. This may take a while.')) {
+            return;
+        }
+
+        const btn = this.elements.priceCheckBtn;
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span>&#8987;</span> Checking...';
+        }
+
+        try {
+            const result = await this.api('/api/items/price-check', {
+                method: 'POST',
+                body: JSON.stringify({ limit: 30 })
+            });
+
+            let msg = `Checked ${result.checked} items`;
+            if (result.price_drops > 0) {
+                msg += `, ${result.price_drops} price drops!`;
+            }
+            if (result.price_increases > 0) {
+                msg += `, ${result.price_increases} increased`;
+            }
+
+            this.showToast(msg, result.price_drops > 0 ? 'success' : 'info');
+
+            // Reload to show updated prices
+            if (result.updated > 0) {
+                await this.loadItems();
+            }
+
+        } catch (error) {
+            this.showToast('Price check failed', 'error');
+        } finally {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = '<span>&#36;</span> Check Prices';
+            }
         }
     },
 

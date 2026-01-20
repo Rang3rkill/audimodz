@@ -16,6 +16,64 @@
     </div>
 </div>
 
+<!-- Smart Filters Toolbar -->
+<div class="filter-toolbar" id="filterToolbar">
+    <div class="filter-chips">
+        <button class="filter-chip" data-filter="all" title="Show all items">
+            <span class="chip-icon">&#9776;</span> All
+        </button>
+        <button class="filter-chip" data-filter="favorites" title="Show favorites only">
+            <span class="chip-icon">&#10084;</span> Favorites
+        </button>
+        <button class="filter-chip" data-filter="price-drops" title="Items with price drops">
+            <span class="chip-icon">&#8595;</span> Price Drops
+        </button>
+        <button class="filter-chip warning" data-filter="missing" title="Items missing data">
+            <span class="chip-icon">&#9888;</span> Missing Data <span class="chip-count" id="missingFilterCount"></span>
+        </button>
+        <button class="filter-chip" data-filter="ready" title="Items in cart">
+            <span class="chip-icon">&#10003;</span> In Cart
+        </button>
+    </div>
+    <div class="filter-actions">
+        <select id="sortSelect" class="sort-dropdown" title="Sort items">
+            <option value="position">Default Order</option>
+            <option value="price-asc">Price: Low to High</option>
+            <option value="price-desc">Price: High to Low</option>
+            <option value="date-desc">Newest First</option>
+            <option value="date-asc">Oldest First</option>
+            <option value="title-asc">Name: A-Z</option>
+        </select>
+        <button id="selectModeBtn" class="btn btn-icon" title="Select multiple items">
+            <span>&#9745;</span>
+        </button>
+    </div>
+</div>
+
+<!-- Batch Actions Bar (hidden by default) -->
+<div class="batch-bar hidden" id="batchBar">
+    <div class="batch-info">
+        <span id="selectedCount">0</span> items selected
+        <button class="btn-link" id="selectAllBtn">Select All</button>
+        <button class="btn-link" id="deselectAllBtn">Deselect All</button>
+    </div>
+    <div class="batch-actions">
+        <button class="btn btn-small" id="batchAddToCart" title="Add to cart">
+            <span>&#10003;</span> Add to Cart
+        </button>
+        <button class="btn btn-small" id="batchFavorite" title="Add to favorites">
+            <span>&#10084;</span> Favorite
+        </button>
+        <button class="btn btn-small" id="batchMove" title="Move to list">
+            <span>&#8596;</span> Move
+        </button>
+        <button class="btn btn-small btn-danger" id="batchDelete" title="Delete selected">
+            <span>&#128465;</span> Delete
+        </button>
+        <button class="btn btn-secondary btn-small" id="exitSelectMode">Cancel</button>
+    </div>
+</div>
+
 <nav class="category-tabs" id="categoryTabs">
     <button class="tab active" data-category="">All</button>
 </nav>
@@ -138,7 +196,7 @@
                 <input type="number" id="editItemQuantity" value="1" min="1">
             </div>
             <div class="form-group">
-                <label for="editItemNotes">Notes (for caretaker)</label>
+                <label for="editItemNotes">Notes (private)</label>
                 <textarea id="editItemNotes" placeholder="Add notes about this item..."></textarea>
             </div>
             <div class="form-row">
