@@ -8,6 +8,54 @@ from functools import wraps
 
 items_bp = Blueprint('items', __name__, url_prefix='/api/items')
 
+# Patterns that indicate a placeholder/generic image rather than an actual product photo
+BAD_IMAGE_PATTERNS = [
+    '/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
+    'sale_banner', 'flash_sale', 'promotion', 'coupon',
+    '/bg/', '/background/', 'placeholder',
+]
+
+
+def is_valid_product_image(url):
+    """Check if an image URL looks like a real product image vs a generic placeholder."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    for pattern in BAD_IMAGE_PATTERNS:
+        if pattern in url_lower:
+            return False
+    # Must be from a known CDN with product-like path
+    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront']):
+        return False
+    # Product images typically have dimensions or product identifiers
+    # Very short URLs are suspicious
+    if len(url) < 30:
+        return False
+    return True
+
+
+def has_valid_image(item):
+    """Check if an item has a valid (non-placeholder) product image."""
+    url = item.get('image_url', '')
+    if not url:
+        return False
+    # Check for embedded thumb_url as a sign the extension provided a real image
+    product_url = item.get('product_url', '')
+    if 'thumb_url=' in product_url:
+        from urllib.parse import urlparse, parse_qs, unquote
+        try:
+            parsed = urlparse(product_url)
+            params = parse_qs(parsed.query)
+            if 'thumb_url' in params:
+                embedded = unquote(params['thumb_url'][0])
+                # If current image matches the extension-provided one, it's valid
+                if url == embedded:
+                    return True
+        except Exception:
+            pass
+    return is_valid_product_image(url)
+
+
 # Rate limiting for scraping
 SCRAPE_DELAY = 1.0  # seconds between scrape requests
 last_scrape_time = 0
@@ -284,9 +332,9 @@ def get_stats():
 
     # Add missing data counts
     items = Item.get_all()
-    stats['missing_image'] = len([i for i in items if not i.get('image_url')])
+    stats['missing_image'] = len([i for i in items if not has_valid_image(i)])
     stats['missing_price'] = len([i for i in items if i.get('current_price') is None])
-    stats['missing_any'] = len([i for i in items if not i.get('image_url') or i.get('current_price') is None])
+    stats['missing_any'] = len([i for i in items if not has_valid_image(i) or i.get('current_price') is None])
 
     return jsonify(stats)
 
@@ -552,8 +600,8 @@ def scrape_temu_product(url):
             img_url = match.group(1)
             # Clean up escaped characters
             img_url = img_url.replace('\\/', '/').replace('\\u002F', '/')
-            # Validate it's a product image
-            if any(domain in img_url for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront']):
+            # Validate it's a real product image (not a placeholder/banner)
+            if is_valid_product_image(img_url):
                 data['image_url'] = img_url
                 break
 
@@ -679,11 +727,11 @@ def refresh_missing_data():
     data = request.get_json() or {}
     limit = data.get('limit', 50)  # Limit to prevent long-running requests
 
-    # Get all items missing data
+    # Get all items missing data (including items with bad/placeholder images)
     items = Item.get_all()
     missing_items = [
         i for i in items
-        if not i.get('image_url') or i.get('current_price') is None
+        if not has_valid_image(i) or i.get('current_price') is None
     ][:limit]
 
     if not missing_items:
@@ -730,8 +778,9 @@ def refresh_missing_data():
         updates = {'last_checked': datetime.now().isoformat()}
         updated_fields = []
 
-        if scraped.get('image_url'):
-            if not item.get('image_url') or scraped['image_url'] != item.get('image_url'):
+        if scraped.get('image_url') and is_valid_product_image(scraped['image_url']):
+            # Only set image if item has NO image - never overwrite with server-scraped data
+            if not item.get('image_url'):
                 updates['image_url'] = scraped['image_url']
                 updated_fields.append('image')
 
@@ -761,7 +810,7 @@ def refresh_missing_data():
             Item.update(item['id'], **updates)
             results.append({'id': item['id'], 'status': 'no_updates'})
 
-    total_missing = len([i for i in items if not i.get('image_url') or i.get('current_price') is None])
+    total_missing = len([i for i in items if not has_valid_image(i) or i.get('current_price') is None])
 
     return jsonify({
         'success': True,
@@ -779,28 +828,68 @@ def refresh_pictures():
     """Bulk refresh pictures for all items by re-scraping product pages (images only)."""
     data = request.get_json() or {}
     limit = data.get('limit', 50)
+    offset = data.get('offset', 0)
     item_ids = data.get('item_ids', None)
 
     items = Item.get_all()
     # Filter to items with product URLs
-    target_items = [i for i in items if i.get('product_url')]
+    all_with_url = [i for i in items if i.get('product_url')]
 
     # If specific IDs provided, filter to those
     if item_ids:
         id_set = set(item_ids)
-        target_items = [i for i in target_items if i['id'] in id_set]
+        all_with_url = [i for i in all_with_url if i['id'] in id_set]
 
-    target_items = target_items[:limit]
+    # Prioritize items with bad/missing images first
+    bad_image_items = [i for i in all_with_url if not has_valid_image(i)]
+    good_image_items = [i for i in all_with_url if has_valid_image(i)]
+    sorted_items = bad_image_items + good_image_items
+    target_items = sorted_items[offset:offset + limit]
 
     if not target_items:
         return jsonify({'success': True, 'message': 'No items to refresh', 'refreshed': 0, 'failed': 0})
 
     refreshed = 0
     failed = 0
+    skipped = 0
+
+    # Build a set of image URLs already used by other items to detect generic/shared images
+    all_image_urls = {}
+    for i in items:
+        url = i.get('image_url', '')
+        if url:
+            all_image_urls[url] = all_image_urls.get(url, 0) + 1
 
     for item in target_items:
-        product_url = item.get('product_url')
+        product_url = item.get('product_url', '')
         store = item.get('store', '')
+
+        # Primary: check for embedded thumb_url from extension (most reliable source)
+        if 'thumb_url=' in product_url:
+            from urllib.parse import urlparse, parse_qs, unquote
+            try:
+                parsed = urlparse(product_url)
+                params = parse_qs(parsed.query)
+                if 'thumb_url' in params:
+                    embedded = unquote(params['thumb_url'][0])
+                    if embedded and embedded != item.get('image_url'):
+                        Item.update(item['id'], image_url=embedded, last_checked=datetime.now().isoformat())
+                        refreshed += 1
+                        continue
+                    elif embedded == item.get('image_url'):
+                        # Already has the correct extension-provided image
+                        skipped += 1
+                        continue
+            except Exception:
+                pass
+
+        # Only attempt server-side scrape for items with NO image at all.
+        # Server-side scraping is unreliable because Temu renders product images
+        # via JavaScript - the static HTML only contains generic sale/promo images.
+        # NEVER overwrite an existing image with a server-scraped one.
+        if item.get('image_url'):
+            skipped += 1
+            continue
 
         try:
             if 'temu' in store.lower() or 'temu.com' in product_url:
@@ -816,20 +905,92 @@ def refresh_pictures():
             failed += 1
             continue
 
-        # Only update image if we got a new one
         new_image = scraped['image_url']
-        if new_image != item.get('image_url'):
+        # Reject if this same URL is already used by 3+ other items (it's generic)
+        if all_image_urls.get(new_image, 0) >= 3:
+            failed += 1
+            continue
+
+        if is_valid_product_image(new_image):
             Item.update(item['id'], image_url=new_image, last_checked=datetime.now().isoformat())
+            all_image_urls[new_image] = all_image_urls.get(new_image, 0) + 1
             refreshed += 1
         else:
-            Item.update(item['id'], last_checked=datetime.now().isoformat())
+            failed += 1
+
+    total_bad = len([i for i in items if i.get('product_url') and not has_valid_image(i)])
 
     return jsonify({
         'success': True,
         'refreshed': refreshed,
         'failed': failed,
         'processed': len(target_items),
-        'total': len([i for i in items if i.get('product_url')])
+        'total': len(all_with_url),
+        'bad_images_remaining': total_bad
+    })
+
+
+@items_bp.route('/clean-bad-images', methods=['POST'])
+def clean_bad_images():
+    """Detect and clear duplicate/generic images that were set by server-side scraping.
+
+    Images shared by 3+ items are almost certainly generic placeholders from Temu's
+    static HTML, not real product photos. This endpoint clears them so the extension
+    can re-provide the correct images.
+    """
+    items = Item.get_all()
+
+    # Count how many items share each image URL
+    image_counts = {}
+    for item in items:
+        url = item.get('image_url', '')
+        if url:
+            image_counts[url] = image_counts.get(url, 0) + 1
+
+    # Find duplicate images (used by 3+ items = definitely generic)
+    duplicate_urls = {url for url, count in image_counts.items() if count >= 3}
+
+    # Also check for items where image doesn't match embedded thumb_url
+    cleared = 0
+    mismatched = 0
+    for item in items:
+        current_image = item.get('image_url', '')
+        if not current_image:
+            continue
+
+        should_clear = False
+
+        # Clear if image is shared across many items (generic placeholder)
+        if current_image in duplicate_urls:
+            should_clear = True
+
+        # Clear if item has embedded thumb_url that doesn't match current image
+        product_url = item.get('product_url', '')
+        if 'thumb_url=' in product_url:
+            from urllib.parse import urlparse, parse_qs, unquote
+            try:
+                parsed = urlparse(product_url)
+                params = parse_qs(parsed.query)
+                if 'thumb_url' in params:
+                    embedded = unquote(params['thumb_url'][0])
+                    if embedded and embedded != current_image:
+                        # Replace with the correct extension-provided image
+                        Item.update(item['id'], image_url=embedded)
+                        mismatched += 1
+                        continue
+            except Exception:
+                pass
+
+        if should_clear:
+            Item.update(item['id'], image_url='')
+            cleared += 1
+
+    return jsonify({
+        'success': True,
+        'cleared': cleared,
+        'restored_from_extension': mismatched,
+        'duplicate_image_urls': len(duplicate_urls),
+        'duplicate_url_list': list(duplicate_urls)[:10]  # Show first 10 for debugging
     })
 
 
