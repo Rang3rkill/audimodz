@@ -23,6 +23,8 @@ const elements = {
   listSelect: document.getElementById('listSelect'),
   importBtn: document.getElementById('importBtn'),
   result: document.getElementById('result'),
+  refreshImagesBtn: document.getElementById('refreshImagesBtn'),
+  refreshResult: document.getElementById('refreshResult'),
   // Share link section
   shareSection: document.getElementById('shareSection'),
   shareLink: document.getElementById('shareLink'),
@@ -92,11 +94,13 @@ function updateScanSection() {
     elements.storeName.textContent = currentStore.name + ' cart detected';
     elements.scanControls.classList.remove('hidden');
     elements.unsupportedMsg.classList.add('hidden');
+    elements.refreshImagesBtn.classList.remove('hidden');
   } else {
     // Not on a supported store
     elements.storeInfo.classList.add('hidden');
     elements.scanControls.classList.add('hidden');
     elements.unsupportedMsg.classList.remove('hidden');
+    elements.refreshImagesBtn.classList.add('hidden');
   }
 }
 
@@ -1367,6 +1371,62 @@ async function pasteFromClipboard() {
 }
 
 // Event listeners
+// Refresh images: scrape cart for images and push to server
+async function refreshImages() {
+  elements.refreshImagesBtn.disabled = true;
+  elements.refreshImagesBtn.textContent = '🖼️ Scanning cart for images...';
+  elements.refreshResult.classList.add('hidden');
+
+  try {
+    // Re-use the existing scraper to get items with images
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      func: currentStore.key === 'temu' ? scrapeTemuAllTabs : scrapeCartItems,
+      args: [currentStore.key],
+    });
+
+    const items = results[0]?.result || [];
+    if (items.length === 0) {
+      elements.refreshResult.textContent = 'No items found on cart page.';
+      elements.refreshResult.className = 'result error';
+      elements.refreshResult.classList.remove('hidden');
+      return;
+    }
+
+    // Build updates: extract goods_id from product_url and pair with image
+    const updates = [];
+    for (const item of items) {
+      if (!item.image_url || !item.product_url) continue;
+      const match = item.product_url.match(/goods_id=(\d+)/);
+      if (!match) continue;
+      updates.push({ goods_id: match[1], image_url: item.image_url });
+    }
+
+    elements.refreshImagesBtn.textContent = `🖼️ Pushing ${updates.length} images...`;
+
+    const response = await fetch(`${API_BASE}/api/items/update-images`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates }),
+    });
+
+    if (!response.ok) throw new Error('Server error');
+
+    const data = await response.json();
+    elements.refreshResult.textContent = `Updated ${data.updated} of ${data.total} images`;
+    elements.refreshResult.className = 'result success';
+    elements.refreshResult.classList.remove('hidden');
+  } catch (error) {
+    console.error('Image refresh failed:', error);
+    elements.refreshResult.textContent = 'Failed: ' + error.message;
+    elements.refreshResult.className = 'result error';
+    elements.refreshResult.classList.remove('hidden');
+  } finally {
+    elements.refreshImagesBtn.disabled = false;
+    elements.refreshImagesBtn.textContent = '🖼️ Refresh All Images';
+  }
+}
+
 // Method switching
 elements.methodScanBtn.addEventListener('click', () => switchMethod('scan'));
 elements.methodShareBtn.addEventListener('click', () => switchMethod('share'));
@@ -1375,6 +1435,7 @@ elements.methodShareBtn.addEventListener('click', () => switchMethod('share'));
 elements.importBtn.addEventListener('click', importCart);
 elements.shareImportBtn.addEventListener('click', importFromShareLink);
 elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
+elements.refreshImagesBtn.addEventListener('click', refreshImages);
 
 // Allow Enter key to trigger import
 elements.shareLink.addEventListener('keypress', (e) => {
