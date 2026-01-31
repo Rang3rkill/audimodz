@@ -114,6 +114,7 @@ const App = {
             editItemNotes: document.getElementById('editItemNotes'),
             editItemImageUrl: document.getElementById('editItemImageUrl'),
             editItemImagePreview: document.getElementById('editItemImagePreview'),
+            editItemUnavailable: document.getElementById('editItemUnavailable'),
             deleteItemBtn: document.getElementById('deleteItemBtn'),
             // Import from link
             importLinkBtn: document.getElementById('importLinkBtn'),
@@ -184,6 +185,7 @@ const App = {
             sortSelect: document.getElementById('sortSelect'),
             selectModeBtn: document.getElementById('selectModeBtn'),
             missingFilterCount: document.getElementById('missingFilterCount'),
+            unavailableFilterCount: document.getElementById('unavailableFilterCount'),
             // Batch bar
             batchBar: document.getElementById('batchBar'),
             selectedCount: document.getElementById('selectedCount'),
@@ -1272,8 +1274,11 @@ const App = {
         const isSelected = this.selectedItems.has(item.id);
         const selectIndicator = `<div class="select-indicator">${isSelected ? '&#10003;' : ''}</div>`;
 
+        const unavailableClass = item.is_unavailable ? 'unavailable' : '';
+        const unavailableBadge = item.is_unavailable ? '<span class="unavailable-badge">Unavailable</span>' : '';
+
         return `
-            <div class="item-card ${needsRefresh ? 'needs-refresh' : ''} ${isSelected ? 'selected' : ''}" data-id="${item.id}" draggable="true">
+            <div class="item-card ${needsRefresh ? 'needs-refresh' : ''} ${isSelected ? 'selected' : ''} ${unavailableClass}" data-id="${item.id}" draggable="true">
                 <div class="item-image-container">
                     ${selectIndicator}
                     ${imageHtml}
@@ -1282,6 +1287,7 @@ const App = {
                     ${refreshBtn}
                     <button class="edit-btn" data-id="${item.id}" title="Edit">&#9998;</button>
                     <span class="store-badge ${storeClass}">${storeName}</span>
+                    ${unavailableBadge}
                     ${indicators ? `<div class="item-indicators">${indicators}</div>` : ''}
                     ${ageBadge}
                     ${notesHtml}
@@ -2362,6 +2368,9 @@ const App = {
         if (this.elements.editItemNotes) {
             this.elements.editItemNotes.value = item.notes || '';
         }
+        if (this.elements.editItemUnavailable) {
+            this.elements.editItemUnavailable.checked = !!item.is_unavailable;
+        }
         if (this.elements.editItemImageUrl) {
             this.elements.editItemImageUrl.value = item.image_url || '';
             const preview = this.elements.editItemImagePreview;
@@ -2387,6 +2396,9 @@ const App = {
 
         if (this.elements.editItemNotes) {
             updates.notes = this.elements.editItemNotes.value || null;
+        }
+        if (this.elements.editItemUnavailable) {
+            updates.is_unavailable = this.elements.editItemUnavailable.checked ? 1 : 0;
         }
         if (this.elements.editItemImageUrl) {
             const imgUrl = this.elements.editItemImageUrl.value.trim();
@@ -2458,6 +2470,9 @@ const App = {
             case 'ready':
                 items = items.filter(i => i.in_ready_to_buy);
                 break;
+            case 'unavailable':
+                items = items.filter(i => i.is_unavailable);
+                break;
             // 'all' shows everything
         }
 
@@ -2497,10 +2512,41 @@ const App = {
             return;
         }
 
+        // Separate available and unavailable items (only when showing 'all' filter)
+        let availableItems, unavailableItems;
+        if (this.currentFilter === 'all') {
+            availableItems = this.filteredItems.filter(i => !i.is_unavailable);
+            unavailableItems = this.filteredItems.filter(i => i.is_unavailable);
+        } else {
+            availableItems = this.filteredItems;
+            unavailableItems = [];
+        }
+
         let html = '';
-        for (const item of this.filteredItems) {
+        for (const item of availableItems) {
             html += this.renderItemCard(item);
         }
+
+        // Add collapsible unavailable section
+        if (unavailableItems.length > 0) {
+            const collapsed = localStorage.getItem('unavailable_collapsed') !== 'false';
+            html += `
+                <div class="unavailable-section">
+                    <button class="unavailable-toggle" onclick="App.toggleUnavailableSection()">
+                        <span class="unavailable-arrow">${collapsed ? '&#9654;' : '&#9660;'}</span>
+                        Unavailable items (${unavailableItems.length})
+                    </button>
+                    <div class="unavailable-items ${collapsed ? 'collapsed' : ''}">
+            `;
+            for (const item of unavailableItems) {
+                html += this.renderItemCard(item);
+            }
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+
         this.elements.itemsGrid.innerHTML = html;
 
         // Re-bind events
@@ -2513,11 +2559,28 @@ const App = {
         }
     },
 
+    toggleUnavailableSection() {
+        const items = document.querySelector('.unavailable-items');
+        const arrow = document.querySelector('.unavailable-arrow');
+        if (items) {
+            const isCollapsed = items.classList.toggle('collapsed');
+            localStorage.setItem('unavailable_collapsed', isCollapsed);
+            if (arrow) {
+                arrow.innerHTML = isCollapsed ? '&#9654;' : '&#9660;';
+            }
+        }
+    },
+
     updateFilterCounts() {
         // Update missing data count in filter chip
         const missingCount = this.items.filter(i => !i.image_url || i.current_price === null).length;
         if (this.elements.missingFilterCount) {
             this.elements.missingFilterCount.textContent = missingCount > 0 ? `(${missingCount})` : '';
+        }
+        // Update unavailable count in filter chip
+        const unavailableCount = this.items.filter(i => i.is_unavailable).length;
+        if (this.elements.unavailableFilterCount) {
+            this.elements.unavailableFilterCount.textContent = unavailableCount > 0 ? `(${unavailableCount})` : '';
         }
     },
 

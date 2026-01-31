@@ -322,6 +322,10 @@ class Item:
         else:
             stats['oldest_item_age'] = '-'
 
+        # Unavailable count
+        cursor.execute('SELECT COUNT(*) FROM items WHERE is_unavailable = 1')
+        stats['unavailable'] = cursor.fetchone()[0]
+
         # Price drops count
         cursor.execute('''
             SELECT COUNT(*) FROM items
