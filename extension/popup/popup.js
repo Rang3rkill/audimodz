@@ -375,12 +375,18 @@ async function scrapeTemuAllTabs() {
       if (items && Array.isArray(items) && items.length > 0) {
         console.log(`[Judi\'s Wishlist] Found ${items.length} items in JavaScript data!`);
         items.forEach(item => {
-          const productId = item.goods_id || item.goodsId || item.product_id || item.id;
+          const productId = item.goods_id || item.goodsId || item.product_id || item.subject_id || item.id;
           if (!productId || allItems.has(String(productId))) return;
+
+          // Build URL - use goods_id format for consistency
+          let productUrl = item.product_url || item.url || '';
+          if (!productUrl || !productUrl.includes('temu.com')) {
+            productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+          }
 
           allItems.set(String(productId), {
             product_id: String(productId),
-            product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+            product_url: productUrl,
             title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
             image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img,
             price: item.price || item.sale_price || item.salePrice || item.current_price,
@@ -412,6 +418,8 @@ async function scrapeTemuAllTabs() {
     const cartPatterns = [
       /"goods_id"\s*:\s*"?(\d+)"?/g,
       /"goodsId"\s*:\s*"?(\d+)"?/g,
+      /"product_id"\s*:\s*"?(\d+)"?/g,
+      /"subject_id"\s*:\s*"?(\d+)"?/g,
     ];
 
     for (const pattern of cartPatterns) {

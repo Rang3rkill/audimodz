@@ -365,6 +365,7 @@ def import_items():
             if not product_id:
                 errors.append('Item missing product_id')
                 continue
+            product_id = str(product_id)
 
             new_price = item_data.get('price')
 
@@ -374,7 +375,7 @@ def import_items():
                 # Check if price changed
                 old_price = existing.get('current_price')
 
-                if new_price is not None and old_price != new_price:
+                if new_price is not None and (old_price is None or abs((old_price or 0) - new_price) > 0.001):
                     # Price changed - update the item
                     Item.update(
                         existing['id'],
@@ -705,16 +706,29 @@ def refresh_missing_data():
             results.append({'id': item['id'], 'status': 'no_data'})
             continue
 
-        # Update item with scraped data
+        # Update item with scraped data - update all fields, not just missing ones
         updates = {'last_checked': datetime.now().isoformat()}
         updated_fields = []
 
-        if scraped.get('image_url') and not item.get('image_url'):
-            updates['image_url'] = scraped['image_url']
-            updated_fields.append('image')
-        if scraped.get('price') is not None and item.get('current_price') is None:
-            updates['current_price'] = scraped['price']
-            updated_fields.append('price')
+        if scraped.get('image_url'):
+            if not item.get('image_url') or scraped['image_url'] != item.get('image_url'):
+                updates['image_url'] = scraped['image_url']
+                updated_fields.append('image')
+
+        if scraped.get('price') is not None:
+            old_price = item.get('current_price')
+            new_price = scraped['price']
+            if old_price is None:
+                updates['current_price'] = new_price
+                if item.get('original_price') is None:
+                    updates['original_price'] = new_price
+                updated_fields.append('price')
+            elif abs(old_price - new_price) > 0.001:
+                updates['last_price'] = old_price
+                updates['current_price'] = new_price
+                updates['price_updated_at'] = datetime.now().isoformat()
+                updated_fields.append('price')
+
         if scraped.get('title') and (not item.get('title') or item.get('title') in ['Unknown Product', '']):
             updates['title'] = scraped['title']
             updated_fields.append('title')
@@ -787,7 +801,7 @@ def check_prices():
             old_price = item.get('current_price')
             new_price = scraped['price']
 
-            if old_price and old_price != new_price:
+            if old_price is not None and abs(old_price - new_price) > 0.001:
                 Item.update(item['id'],
                            last_price=old_price,
                            current_price=new_price,
@@ -808,6 +822,14 @@ def check_prices():
                     results['price_drops'] += 1
                 else:
                     results['price_increases'] += 1
+            elif old_price is None:
+                # Item had no price before - fill it in
+                Item.update(item['id'],
+                           current_price=new_price,
+                           original_price=new_price,
+                           price_updated_at=datetime.now().isoformat(),
+                           last_checked=datetime.now().isoformat())
+                results['updated'] += 1
             else:
                 Item.update(item['id'], last_checked=datetime.now().isoformat())
 
@@ -828,11 +850,19 @@ def import_from_link():
     if 'temu.com' not in url:
         return jsonify({'error': 'Only Temu links are supported right now'}), 400
 
-    # Extract product ID from URL
+    # Extract product ID from URL - try multiple patterns (browser + app URLs)
     product_id = None
-    id_match = re.search(r'goods_id=(\d+)', url)
-    if id_match:
-        product_id = id_match.group(1)
+    id_patterns = [
+        r'goods_id=(\d+)',
+        r'_p_(\d+)\.html',
+        r'/product/(\d+)',
+        r'subject_id=(\d+)',
+    ]
+    for pattern in id_patterns:
+        id_match = re.search(pattern, url)
+        if id_match:
+            product_id = id_match.group(1)
+            break
 
     # Also try share.temu.com short links - follow redirect
     if 'share.temu.com' in url or not product_id:
@@ -840,9 +870,11 @@ def import_from_link():
             resp = requests.head(url, allow_redirects=True, timeout=10,
                                  headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
             url = resp.url
-            id_match = re.search(r'goods_id=(\d+)', url)
-            if id_match:
-                product_id = id_match.group(1)
+            for pattern in id_patterns:
+                id_match = re.search(pattern, url)
+                if id_match:
+                    product_id = id_match.group(1)
+                    break
         except Exception:
             pass
 
