@@ -505,10 +505,26 @@ async function scrapeTemuAllTabs() {
   // Helper function to scrape items from current view
   function scrapeCurrentItems() {
     const items = [];
-    const productLinks = document.querySelectorAll('a[href*="goods_id="]');
+    // Find links using multiple selectors to catch both browser and app-added items
+    const linkSelectors = [
+      'a[href*="goods_id="]',
+      'a[href*="_p_"]',
+      'a[href*="/product/"]',
+      'a[href*="subject_id="]',
+      'a[href*="share.temu.com"]',
+    ];
+    const linkSet = new Set();
+    for (const sel of linkSelectors) {
+      document.querySelectorAll(sel).forEach(l => linkSet.add(l));
+    }
+    const productLinks = Array.from(linkSet);
 
     productLinks.forEach(link => {
-      const match = link.href.match(/goods_id=(\d+)/);
+      // Try multiple ID extraction patterns
+      let match = link.href.match(/goods_id=(\d+)/);
+      if (!match) match = link.href.match(/_p_(\d+)\.html/);
+      if (!match) match = link.href.match(/\/product\/(\d+)/);
+      if (!match) match = link.href.match(/subject_id=(\d+)/);
       if (!match) return;
 
       const productId = match[1];

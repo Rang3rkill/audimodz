@@ -448,6 +448,27 @@ def scrape_temu_product(url):
     """Scrape product data from a Temu product page with retry logic."""
     rate_limit_scrape()
 
+    # Handle app-style URLs: follow redirects for share links and normalize URLs
+    if 'share.temu.com' in url:
+        try:
+            resp = requests.head(url, allow_redirects=True, timeout=10,
+                                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+            url = resp.url
+        except Exception:
+            pass
+
+    # Extract goods_id from app-style URLs like /product-name_p_12345.html
+    if 'goods_id=' not in url:
+        id_match = re.search(r'_p_(\d+)\.html', url)
+        if not id_match:
+            id_match = re.search(r'/product/(\d+)', url)
+        if not id_match:
+            id_match = re.search(r'subject_id=(\d+)', url)
+        if id_match:
+            # Normalize to standard goods_id URL for reliable scraping
+            goods_id = id_match.group(1)
+            url = f'https://www.temu.com/goods.html?goods_id={goods_id}'
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -575,27 +596,47 @@ def refresh_item(item_id):
     if not scraped:
         return jsonify({'error': 'Could not fetch product data. The page may be unavailable or the product removed.'}), 500
 
-    # Update item with scraped data
+    # Update item with scraped data - update ALL fields, not just missing ones
     updates = {}
     updated_fields = []
 
-    # Always update missing data
-    if scraped.get('image_url') and not item.get('image_url'):
-        updates['image_url'] = scraped['image_url']
-        updated_fields.append('image')
+    # Update image if scraped and either missing or different
+    if scraped.get('image_url'):
+        if not item.get('image_url'):
+            updates['image_url'] = scraped['image_url']
+            updated_fields.append('image')
+        elif scraped['image_url'] != item.get('image_url'):
+            updates['image_url'] = scraped['image_url']
+            updated_fields.append('image')
 
-    if scraped.get('price') is not None and item.get('current_price') is None:
-        updates['current_price'] = scraped['price']
-        updated_fields.append('price')
+    # Update price - always update if different, track price history
+    if scraped.get('price') is not None:
+        old_price = item.get('current_price')
+        new_price = scraped['price']
+        if old_price is None:
+            updates['current_price'] = new_price
+            if item.get('original_price') is None:
+                updates['original_price'] = new_price
+            updated_fields.append('price')
+        elif abs(old_price - new_price) > 0.001:
+            updates['last_price'] = old_price
+            updates['current_price'] = new_price
+            updates['price_updated_at'] = datetime.now().isoformat()
+            if new_price < old_price:
+                updated_fields.append(f'price (dropped ${old_price:.2f} → ${new_price:.2f})')
+            else:
+                updated_fields.append(f'price (changed ${old_price:.2f} → ${new_price:.2f})')
 
-    if scraped.get('title') and (not item.get('title') or item.get('title') in ['Unknown Product', '']):
-        updates['title'] = scraped['title']
-        updated_fields.append('title')
+    # Update title if scraped and either missing or placeholder
+    if scraped.get('title'):
+        if not item.get('title') or item.get('title') in ['Unknown Product', '']:
+            updates['title'] = scraped['title']
+            updated_fields.append('title')
 
     # Track last refresh time
     updates['last_checked'] = datetime.now().isoformat()
 
-    if updates:
+    if len(updated_fields) > 0:
         updated_item = Item.update(item_id, **updates)
         return jsonify({
             'success': True,
@@ -607,7 +648,7 @@ def refresh_item(item_id):
         return jsonify({
             'success': True,
             'updated_fields': [],
-            'message': 'No missing data to update, but page was accessible'
+            'message': 'Data is already up to date'
         })
 
 
