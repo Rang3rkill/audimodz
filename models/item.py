@@ -110,16 +110,19 @@ class Item:
         max_pos = cursor.fetchone()[0]
         position = (max_pos or 0) + 1
 
+        now = datetime.now().isoformat()
         cursor.execute('''
             INSERT INTO items (
                 store, product_id, product_url, title, image_url,
                 current_price, original_price, quantity, piece_count,
-                category_id, list_id, position
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                category_id, list_id, position, price_updated_at, last_checked
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            store, product_id, product_url, title, image_url,
+            store, str(product_id), product_url, title, image_url,
             current_price, current_price, quantity, piece_count,
-            category_id, list_id, position
+            category_id, list_id, position,
+            now if current_price is not None else None,
+            now
         ))
 
         item_id = cursor.lastrowid
