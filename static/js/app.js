@@ -113,6 +113,12 @@ const App = {
             editItemQuantity: document.getElementById('editItemQuantity'),
             editItemNotes: document.getElementById('editItemNotes'),
             deleteItemBtn: document.getElementById('deleteItemBtn'),
+            // Import from link
+            importLinkBtn: document.getElementById('importLinkBtn'),
+            importLinkModal: document.getElementById('importLinkModal'),
+            importLinkInput: document.getElementById('importLinkInput'),
+            importLinkSubmit: document.getElementById('importLinkSubmit'),
+            importLinkStatus: document.getElementById('importLinkStatus'),
             // Confirm delete modal
             confirmDeleteModal: document.getElementById('confirmDeleteModal'),
             confirmDeleteMessage: document.getElementById('confirmDeleteMessage'),
@@ -203,6 +209,26 @@ const App = {
         // Add item button
         this.elements.addItemBtn.addEventListener('click', () => {
             this.showAddModal();
+        });
+
+        // Import from link button
+        this.elements.importLinkBtn?.addEventListener('click', () => {
+            this.elements.importLinkModal.classList.remove('hidden');
+            this.elements.importLinkInput.focus();
+        });
+
+        this.elements.importLinkModal?.addEventListener('click', (e) => {
+            if (e.target === this.elements.importLinkModal) {
+                this.elements.importLinkModal.classList.add('hidden');
+            }
+        });
+
+        this.elements.importLinkSubmit?.addEventListener('click', () => {
+            this.importFromLink();
+        });
+
+        this.elements.importLinkInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.importFromLink();
         });
 
         // Close modal
@@ -1708,6 +1734,48 @@ const App = {
     hideAddModal() {
         this.elements.addItemModal.classList.add('hidden');
         this.elements.addItemForm.reset();
+    },
+
+    // Import from link
+    async importFromLink() {
+        const url = this.elements.importLinkInput.value.trim();
+        if (!url) return;
+
+        const status = this.elements.importLinkStatus;
+        const btn = this.elements.importLinkSubmit;
+
+        btn.disabled = true;
+        btn.textContent = 'Importing...';
+        status.classList.remove('hidden', 'success', 'error');
+        status.textContent = 'Looking up product...';
+        status.classList.add('info');
+
+        try {
+            const listId = this.currentList || 1;
+            const data = await this.api('/api/items/import-link', {
+                method: 'POST',
+                body: JSON.stringify({ url, list_id: listId }),
+            });
+
+            status.classList.remove('info');
+            if (data.status === 'exists') {
+                status.classList.add('warning');
+                status.textContent = data.message;
+            } else {
+                status.classList.add('success');
+                status.textContent = data.message;
+                this.elements.importLinkInput.value = '';
+                await this.loadItems();
+                await this.loadStats();
+            }
+        } catch (error) {
+            status.classList.remove('info');
+            status.classList.add('error');
+            status.textContent = 'Error: ' + error.message;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Add to Wishlist';
+        }
     },
 
     // Add item
