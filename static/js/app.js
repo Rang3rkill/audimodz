@@ -160,6 +160,7 @@ const App = {
             missingCount: document.getElementById('missingCount'),
             missingDataList: document.getElementById('missingDataList'),
             refreshMissingData: document.getElementById('refreshMissingData'),
+            refreshPictures: document.getElementById('refreshPictures'),
             // Duplicates
             duplicateCount: document.getElementById('duplicateCount'),
             duplicatesList: document.getElementById('duplicatesList'),
@@ -257,6 +258,11 @@ const App = {
         // Refresh missing data (images/prices)
         this.elements.refreshMissingData?.addEventListener('click', () => {
             this.refreshAllMissingData();
+        });
+
+        // Bulk refresh pictures
+        this.elements.refreshPictures?.addEventListener('click', () => {
+            this.bulkRefreshPictures();
         });
 
         // Filter chips
@@ -1463,6 +1469,68 @@ const App = {
         } catch (error) {
             console.error('Bulk refresh failed:', error);
             this.showToast('Failed to refresh items', 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    },
+
+    // Bulk refresh pictures for all items
+    async bulkRefreshPictures() {
+        const btn = this.elements.refreshPictures;
+        if (!btn) return;
+
+        const totalWithUrl = this.items.filter(i => i.product_url).length;
+        if (totalWithUrl === 0) {
+            this.showToast('No items with product URLs to refresh', 'warning');
+            return;
+        }
+
+        if (!confirm(`Refresh pictures for ${totalWithUrl} items?\n\nThis re-scrapes each product page for updated images. It processes 50 at a time and may take a while.`)) {
+            return;
+        }
+
+        const originalHtml = btn.innerHTML;
+        btn.disabled = true;
+
+        let totalRefreshed = 0;
+        let totalFailed = 0;
+        let totalProcessed = 0;
+        let remaining = totalWithUrl;
+        let batch = 0;
+
+        try {
+            while (remaining > 0) {
+                batch++;
+                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch}...`;
+
+                const result = await this.api('/api/items/refresh-pictures', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ limit: 50 })
+                });
+
+                totalRefreshed += result.refreshed || 0;
+                totalFailed += result.failed || 0;
+                totalProcessed += result.processed || 0;
+                remaining = (result.total || 0) - totalProcessed;
+
+                if ((result.processed || 0) === 0) break;
+                // Only one batch for now to avoid overloading
+                break;
+            }
+
+            await this.loadItems();
+            this.renderItems();
+
+            if (totalRefreshed > 0) {
+                this.showToast(`Updated ${totalRefreshed} pictures (${totalFailed} failed)`, 'success');
+            } else {
+                this.showToast(`Pictures checked - all up to date (${totalFailed} failed)`, 'info');
+            }
+        } catch (error) {
+            console.error('Bulk picture refresh failed:', error);
+            this.showToast('Failed to refresh pictures', 'error');
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
