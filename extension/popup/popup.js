@@ -258,8 +258,8 @@ function showResult(message, success, data = null, scrapeStats = null) {
     }
 
     // Show data quality
-    const imgPercent = Math.round((scrapeStats.withImage / scrapeStats.total) * 100);
-    const pricePercent = Math.round((scrapeStats.withPrice / scrapeStats.total) * 100);
+    const imgPercent = scrapeStats.total > 0 ? Math.round((scrapeStats.withImage / scrapeStats.total) * 100) : 0;
+    const pricePercent = scrapeStats.total > 0 ? Math.round((scrapeStats.withPrice / scrapeStats.total) * 100) : 0;
 
     if (imgPercent < 100 || pricePercent < 100) {
       html += `
@@ -384,16 +384,17 @@ async function scrapeTemuAllTabs() {
             productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
           }
 
+          const rawPrice = parseFloat(item.price || item.sale_price || item.salePrice || item.current_price);
+          const validPrice = (!isNaN(rawPrice) && isFinite(rawPrice) && rawPrice > 0.01 && rawPrice < 99999) ? rawPrice : null;
+
           allItems.set(String(productId), {
             product_id: String(productId),
             product_url: productUrl,
             title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
-            image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img,
-            price: item.price || item.sale_price || item.salePrice || item.current_price,
-            quantity: item.quantity || item.qty || 1,
+            image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null,
+            price: validPrice,
+            quantity: Math.max(1, parseInt(item.quantity || item.qty) || 1),
           });
-          stats.withImage++;
-          stats.withPrice++;
         });
 
         if (allItems.size > 0) {
@@ -595,21 +596,28 @@ async function scrapeTemuAllTabs() {
       for (const sel of priceSelectors) {
         const priceEl = container?.querySelector(sel);
         if (priceEl) {
-          const priceMatch = priceEl.textContent?.match(/\$\s*(\d+\.?\d*)/);
+          const priceMatch = priceEl.textContent?.match(/\$\s*([\d,]+\.?\d*)/);
           if (priceMatch) {
-            price = parseFloat(priceMatch[1]);
-            break;
+            const parsed = parseFloat(priceMatch[1].replace(/,/g, ''));
+            if (!isNaN(parsed) && isFinite(parsed) && parsed > 0.01 && parsed < 99999) {
+              price = parsed;
+              break;
+            }
           }
         }
       }
       // Method 2: Search entire container for price pattern
       if (!price && container) {
         // Look for prices, prefer the "current" price (usually the lower one after discount)
-        const allPrices = container.textContent?.match(/\$\s*(\d+\.?\d*)/g) || [];
+        const allPrices = container.textContent?.match(/\$\s*([\d,]+\.?\d*)/g) || [];
         if (allPrices.length > 0) {
           // Parse all prices and take the lowest (usually the sale price)
-          const priceValues = allPrices.map(p => parseFloat(p.replace(/\$\s*/, '')));
-          price = Math.min(...priceValues.filter(p => p > 0));
+          const priceValues = allPrices
+            .map(p => parseFloat(p.replace(/[\$\s,]/g, '')))
+            .filter(p => !isNaN(p) && isFinite(p) && p > 0.01 && p < 99999);
+          if (priceValues.length > 0) {
+            price = Math.min(...priceValues);
+          }
         }
       }
       // Method 3: Check for "LAST DAY" or sale price patterns

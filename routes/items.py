@@ -398,9 +398,14 @@ def import_items():
                     elif old_price and new_price > old_price:
                         price_increases += 1
                 else:
-                    # No price change - but update image if missing
+                    # No price change - but update image if missing, set original_price if unset
+                    reimport_updates = {}
                     if not existing.get('image_url') and item_data.get('image_url'):
-                        Item.update(existing['id'], image_url=item_data.get('image_url'))
+                        reimport_updates['image_url'] = item_data.get('image_url')
+                    if existing.get('original_price') is None and new_price is not None:
+                        reimport_updates['original_price'] = new_price
+                    if reimport_updates:
+                        Item.update(existing['id'], **reimport_updates)
 
                     results.append({
                         'id': existing['id'],

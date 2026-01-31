@@ -1179,7 +1179,7 @@ const App = {
     // Render single item card
     renderItemCard(item) {
         const imageHtml = item.image_url
-            ? `<img src="${item.image_url}" alt="${this.escapeHtml(item.title)}" class="item-image">`
+            ? `<img src="${item.image_url}" alt="${this.escapeHtml(item.title)}" class="item-image" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'item-image-placeholder\\'>?</div>'">`
             : '<div class="item-image-placeholder">?</div>';
 
         const storeClass = item.store.toLowerCase();
@@ -1702,9 +1702,10 @@ const App = {
                     ? `<img src="${item.image_url}" alt="" class="ready-item-image">`
                     : '<div class="ready-item-image"></div>';
 
-                const price = item.current_price || 0;
-                const qty = item.quantity || 1;
+                const price = (item.current_price !== null && item.current_price !== undefined) ? item.current_price : 0;
+                const qty = Math.max(1, item.quantity || 1);
                 const total = (price * qty).toFixed(2);
+                const priceDisplay = item.current_price !== null ? `$${price.toFixed(2)}` : 'No price';
 
                 // Price change indicator for ready-to-buy list
                 let priceIndicator = '';
@@ -1726,7 +1727,7 @@ const App = {
                         <div class="ready-item-details">
                             <div class="ready-item-title">${this.escapeHtml(item.title)}</div>
                             <div class="ready-item-price">
-                                <span>$${price.toFixed(2)} x ${qty}</span>
+                                <span>${priceDisplay} x ${qty}</span>
                                 <span>= $${total}</span>
                                 ${priceIndicator}
                             </div>
