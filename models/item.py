@@ -88,7 +88,7 @@ class Item:
         cursor = conn.cursor()
         cursor.execute('''
             SELECT * FROM items WHERE store = ? AND product_id = ?
-        ''', (store, product_id))
+        ''', (store, str(product_id)))
         row = cursor.fetchone()
         conn.close()
         return dict(row) if row else None

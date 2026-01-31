@@ -12,7 +12,14 @@ function warn(...args) {
 }
 
 const TEMU_SELECTORS = {
-  // Product link - STABLE (contains goods_id)
+  // Product link selectors - try multiple patterns for browser AND app-added items
+  productLinkSelectors: [
+    'a[href*="goods_id="]',       // Standard browser-added items
+    'a[href*="_p_"]',              // App-style product links (e.g., /product-name_p_12345.html)
+    'a[href*="/product/"]',        // App deep links
+    'a[href*="subject_id="]',     // Alternative app parameter
+    'a[href*="share.temu.com"]',  // Shared links from app
+  ],
   productLink: 'a[href*="goods_id="]',
 
   // Price selectors to try (in order)
@@ -41,10 +48,25 @@ const TEMU_SELECTORS = {
   ],
 };
 
-// Extract goods_id from URL
+// Extract product ID from URL - handles both browser and app URL formats
 function extractTemuProductId(href) {
-  const match = href.match(/goods_id=(\d+)/);
-  return match ? match[1] : null;
+  // Standard: goods_id=12345
+  let match = href.match(/goods_id=(\d+)/);
+  if (match) return match[1];
+
+  // App-style: product-name_p_12345.html
+  match = href.match(/_p_(\d+)\.html/);
+  if (match) return match[1];
+
+  // App-style: /product/12345
+  match = href.match(/\/product\/(\d+)/);
+  if (match) return match[1];
+
+  // subject_id parameter
+  match = href.match(/subject_id=(\d+)/);
+  if (match) return match[1];
+
+  return null;
 }
 
 // Build clean product URL
@@ -120,9 +142,17 @@ function scrapeTemuCart() {
   const seen = new Set();
   const skipped = { duplicate: 0, noContainer: 0, noTitle: 0 };
 
-  // Find all product links
-  const productLinks = document.querySelectorAll(TEMU_SELECTORS.productLink);
-  log(`Found ${productLinks.length} product links with selector: ${TEMU_SELECTORS.productLink}`);
+  // Find all product links using multiple selectors (browser + app URLs)
+  const productLinkSet = new Set();
+  for (const selector of TEMU_SELECTORS.productLinkSelectors) {
+    const links = document.querySelectorAll(selector);
+    links.forEach(l => productLinkSet.add(l));
+    if (links.length > 0) {
+      log(`Found ${links.length} links with selector: ${selector}`);
+    }
+  }
+  const productLinks = Array.from(productLinkSet);
+  log(`Found ${productLinks.length} total unique product links`);
 
   // Also try to find cart item containers directly
   const cartContainers = document.querySelectorAll('[class*="cart"], [class*="Cart"], [data-testid*="cart"]');

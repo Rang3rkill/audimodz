@@ -1236,10 +1236,10 @@ const App = {
             ? `<a href="${item.product_url}" target="_blank" class="view-link" title="View on ${storeName}">&#128279;</a>`
             : '';
 
-        // Refresh button for items missing data
+        // Refresh button - always show for items with a product URL (can update price or missing data)
         const needsRefresh = !item.image_url || item.current_price === null;
-        const refreshBtn = needsRefresh && item.product_url
-            ? `<button class="refresh-btn" data-id="${item.id}" title="Fetch missing data from product page">&#8635;</button>`
+        const refreshBtn = item.product_url
+            ? `<button class="refresh-btn" data-id="${item.id}" title="${needsRefresh ? 'Fetch missing data from product page' : 'Re-check price and data from product page'}">&#8635;</button>`
             : '';
 
         // Select indicator for batch mode
