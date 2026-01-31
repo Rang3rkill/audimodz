@@ -34,6 +34,19 @@ if errorlevel 1 (
     )
 )
 
+REM Check if requests is installed
+venv\Scripts\python.exe -c "import requests" 2>nul
+if errorlevel 1 (
+    echo requests not installed. Installing now...
+    venv\Scripts\pip install requests
+    if errorlevel 1 (
+        echo.
+        echo ERROR: Failed to install requests!
+        pause
+        exit /b 1
+    )
+)
+
 echo Starting server...
 echo.
 

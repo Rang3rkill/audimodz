@@ -68,7 +68,7 @@ if not exist "venv" (
 echo.
 echo Installing dependencies...
 venv\Scripts\pip install --upgrade pip
-venv\Scripts\pip install Flask==3.0.0
+venv\Scripts\pip install Flask==3.0.0 requests==2.31.0
 
 if errorlevel 1 (
     echo.
