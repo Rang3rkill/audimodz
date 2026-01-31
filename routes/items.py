@@ -754,6 +754,65 @@ def refresh_missing_data():
     })
 
 
+@items_bp.route('/refresh-pictures', methods=['POST'])
+def refresh_pictures():
+    """Bulk refresh pictures for all items by re-scraping product pages (images only)."""
+    data = request.get_json() or {}
+    limit = data.get('limit', 50)
+    item_ids = data.get('item_ids', None)
+
+    items = Item.get_all()
+    # Filter to items with product URLs
+    target_items = [i for i in items if i.get('product_url')]
+
+    # If specific IDs provided, filter to those
+    if item_ids:
+        id_set = set(item_ids)
+        target_items = [i for i in target_items if i['id'] in id_set]
+
+    target_items = target_items[:limit]
+
+    if not target_items:
+        return jsonify({'success': True, 'message': 'No items to refresh', 'refreshed': 0, 'failed': 0})
+
+    refreshed = 0
+    failed = 0
+
+    for item in target_items:
+        product_url = item.get('product_url')
+        store = item.get('store', '')
+
+        try:
+            if 'temu' in store.lower() or 'temu.com' in product_url:
+                scraped = scrape_temu_product(product_url)
+            else:
+                failed += 1
+                continue
+        except Exception:
+            failed += 1
+            continue
+
+        if not scraped or not scraped.get('image_url'):
+            failed += 1
+            continue
+
+        # Only update image if we got a new one
+        new_image = scraped['image_url']
+        if new_image != item.get('image_url'):
+            Item.update(item['id'], image_url=new_image, last_checked=datetime.now().isoformat())
+            refreshed += 1
+        else:
+            Item.update(item['id'], last_checked=datetime.now().isoformat())
+
+    return jsonify({
+        'success': True,
+        'refreshed': refreshed,
+        'failed': failed,
+        'processed': len(target_items),
+        'total': len([i for i in items if i.get('product_url')])
+    })
+
+
 @items_bp.route('/price-check', methods=['POST'])
 def check_prices():
     """Check current prices for items and update if changed."""
