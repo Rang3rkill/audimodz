@@ -139,6 +139,25 @@
 </div>
 
 <button id="addItemBtn" class="fab" title="Add Item">+</button>
+<button id="importLinkBtn" class="fab fab-import" title="Import from Link">&#128279;</button>
+
+<!-- Import from Link Modal -->
+<div id="importLinkModal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header">
+            <h2>Import from Link</h2>
+            <button class="close-btn" data-close="importLinkModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="import-link-help">Paste a Temu product or share link to add it to your wishlist.</p>
+            <div class="form-group">
+                <input type="url" id="importLinkInput" class="import-link-input" placeholder="Paste Temu link here...">
+            </div>
+            <div id="importLinkStatus" class="import-link-status hidden"></div>
+            <button id="importLinkSubmit" class="btn btn-primary btn-block">Add to Wishlist</button>
+        </div>
+    </div>
+</div>
 
 <!-- Manage Categories Modal -->
 <div id="manageCategoriesModal" class="modal hidden">

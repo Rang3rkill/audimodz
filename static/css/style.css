@@ -608,6 +608,63 @@ form {
     transform: scale(1.1);
 }
 
+.fab-import {
+    right: 100px;
+    background: var(--temu-color);
+    font-size: 24px;
+}
+
+.fab-import:hover {
+    background: #e56200;
+}
+
+.import-link-help {
+    color: var(--text-light);
+    margin: 0 0 16px;
+    font-size: 16px;
+}
+
+.import-link-input {
+    width: 100%;
+    padding: 14px 16px;
+    font-size: 18px;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    outline: none;
+}
+
+.import-link-input:focus {
+    border-color: var(--primary-color);
+}
+
+.import-link-status {
+    padding: 12px 16px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.import-link-status.info {
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.import-link-status.success {
+    background: #f0fdf4;
+    color: #16a34a;
+}
+
+.import-link-status.warning {
+    background: #fefce8;
+    color: #ca8a04;
+}
+
+.import-link-status.error {
+    background: #fef2f2;
+    color: #dc2626;
+}
+
 /* Ready to Buy section */
 .ready-to-buy-section {
     margin-top: 24px;

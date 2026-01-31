@@ -771,3 +771,87 @@ def check_prices():
                 Item.update(item['id'], last_checked=datetime.now().isoformat())
 
     return jsonify(results)
+
+
+@items_bp.route('/import-link', methods=['POST'])
+def import_from_link():
+    """Import a single item from a Temu product URL."""
+    data = request.get_json()
+    url = (data.get('url') or '').strip()
+    list_id = data.get('list_id', 1)
+
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+
+    # Validate it's a Temu URL
+    if 'temu.com' not in url:
+        return jsonify({'error': 'Only Temu links are supported right now'}), 400
+
+    # Extract product ID from URL
+    product_id = None
+    id_match = re.search(r'goods_id=(\d+)', url)
+    if id_match:
+        product_id = id_match.group(1)
+
+    # Also try share.temu.com short links - follow redirect
+    if 'share.temu.com' in url or not product_id:
+        try:
+            resp = requests.head(url, allow_redirects=True, timeout=10,
+                                 headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
+            url = resp.url
+            id_match = re.search(r'goods_id=(\d+)', url)
+            if id_match:
+                product_id = id_match.group(1)
+        except Exception:
+            pass
+
+    if not product_id:
+        # Try scraping the page to find the product ID
+        try:
+            scraped = scrape_temu_product(url)
+        except Exception as e:
+            return jsonify({'error': f'Could not load page: {str(e)}'}), 400
+
+        if not scraped:
+            return jsonify({'error': 'Could not find product info from this link'}), 400
+
+        # Generate a product ID from the URL
+        product_id = re.sub(r'[^a-zA-Z0-9]', '', url)[-20:]
+    else:
+        # Scrape product details
+        try:
+            scraped = scrape_temu_product(url)
+        except Exception as e:
+            scraped = {}
+
+    if not scraped:
+        scraped = {}
+
+    # Check if already exists
+    existing = Item.get_by_product('temu', product_id)
+    if existing:
+        return jsonify({
+            'success': True,
+            'status': 'exists',
+            'message': 'This item is already in your wishlist!',
+            'item': existing
+        })
+
+    # Create the item
+    item = Item.create(
+        store='temu',
+        product_id=product_id,
+        product_url=url,
+        title=scraped.get('title', 'Temu Product'),
+        image_url=scraped.get('image_url'),
+        current_price=scraped.get('price'),
+        quantity=1,
+        list_id=list_id
+    )
+
+    return jsonify({
+        'success': True,
+        'status': 'imported',
+        'message': 'Item added to your wishlist!',
+        'item': item
+    })
