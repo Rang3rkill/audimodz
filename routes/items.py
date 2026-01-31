@@ -13,6 +13,8 @@ BAD_IMAGE_PATTERNS = [
     '/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
     'sale_banner', 'flash_sale', 'promotion', 'coupon',
     '/bg/', '/background/', 'placeholder',
+    'upload_aimg',  # Temu advertising/marketing images, not product photos
+    '/aimg/',        # Advertising image CDN path
 ]
 
 
@@ -941,6 +943,56 @@ def refresh_pictures():
     })
 
 
+@items_bp.route('/bad-images', methods=['GET'])
+def list_bad_images():
+    """List all items with bad/suspect images for manual review."""
+    items = Item.get_all()
+    bad_items = []
+
+    # Count image usage for duplicate detection
+    image_counts = {}
+    for item in items:
+        url = item.get('image_url', '')
+        if url:
+            image_counts[url] = image_counts.get(url, 0) + 1
+
+    for item in items:
+        image_url = item.get('image_url', '')
+        if not image_url:
+            bad_items.append({
+                'id': item['id'],
+                'title': item.get('title', ''),
+                'image_url': None,
+                'product_url': item.get('product_url', ''),
+                'reason': 'missing'
+            })
+            continue
+
+        reasons = []
+        if not is_valid_product_image(image_url):
+            reasons.append('bad_pattern')
+        if image_counts.get(image_url, 0) >= 2:
+            reasons.append(f'duplicate_{image_counts[image_url]}x')
+        if not has_valid_image(item):
+            reasons.append('failed_validation')
+
+        if reasons:
+            bad_items.append({
+                'id': item['id'],
+                'title': item.get('title', ''),
+                'image_url': image_url,
+                'product_url': item.get('product_url', ''),
+                'reason': ', '.join(reasons)
+            })
+
+    return jsonify({
+        'success': True,
+        'total_items': len(items),
+        'bad_count': len(bad_items),
+        'items': bad_items
+    })
+
+
 @items_bp.route('/clean-bad-images', methods=['POST'])
 def clean_bad_images():
     """Detect and clear duplicate/generic images that were set by server-side scraping.
@@ -958,8 +1010,8 @@ def clean_bad_images():
         if url:
             image_counts[url] = image_counts.get(url, 0) + 1
 
-    # Find duplicate images (used by 3+ items = definitely generic)
-    duplicate_urls = {url for url, count in image_counts.items() if count >= 3}
+    # Find duplicate images (used by 2+ items = likely generic)
+    duplicate_urls = {url for url, count in image_counts.items() if count >= 2}
 
     # Also check for items where image doesn't match embedded thumb_url
     cleared = 0
@@ -973,6 +1025,10 @@ def clean_bad_images():
 
         # Clear if image is shared across many items (generic placeholder)
         if current_image in duplicate_urls:
+            should_clear = True
+
+        # Clear if image matches known bad patterns
+        if not is_valid_product_image(current_image):
             should_clear = True
 
         # Clear if item has embedded thumb_url that doesn't match current image
