@@ -253,7 +253,7 @@ const App = {
 
         // Refresh prices
         this.elements.refreshPrices?.addEventListener('click', () => {
-            alert('Price refresh will be available once the Chrome extension is installed.');
+            this.bulkRefreshPrices();
         });
 
         // Refresh missing data (images/prices)
@@ -1594,6 +1594,75 @@ const App = {
         } catch (error) {
             console.error('Clean bad images failed:', error);
             this.showToast('Failed to clean bad images', 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    },
+
+    // Bulk refresh prices for all items
+    async bulkRefreshPrices() {
+        const btn = this.elements.refreshPrices;
+        if (!btn) return;
+
+        const totalWithUrl = this.items.filter(i => i.product_url).length;
+        if (totalWithUrl === 0) {
+            this.showToast('No items with product URLs to check', 'warning');
+            return;
+        }
+
+        if (!confirm(`Check prices for ${totalWithUrl} items?\n\nThis will process items in batches and may take a while.`)) {
+            return;
+        }
+
+        const originalHtml = btn.innerHTML;
+        btn.disabled = true;
+
+        let totalChecked = 0;
+        let totalUpdated = 0;
+        let totalDrops = 0;
+        let totalIncreases = 0;
+        let totalFailed = 0;
+        let batch = 0;
+        const BATCH_SIZE = 50;
+        let remaining = totalWithUrl;
+
+        try {
+            while (remaining > 0) {
+                batch++;
+                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch} (${totalChecked}/${totalWithUrl})...`;
+
+                const result = await this.api('/api/items/price-check', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ limit: BATCH_SIZE })
+                });
+
+                totalChecked += result.checked || 0;
+                totalUpdated += result.updated || 0;
+                totalDrops += result.price_drops || 0;
+                totalIncreases += result.price_increases || 0;
+                totalFailed += result.failed || 0;
+                remaining = totalWithUrl - totalChecked - totalFailed;
+
+                if ((result.checked || 0) === 0 && (result.failed || 0) === 0) break;
+
+                if (remaining > 0) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+
+            await this.loadItems();
+            this.renderItems();
+
+            if (totalUpdated > 0) {
+                this.showToast(`Checked ${totalChecked} prices: ${totalDrops} drops, ${totalIncreases} increases`, 'success');
+            } else {
+                this.showToast(`Checked ${totalChecked} prices - no changes found`, 'info');
+            }
+        } catch (error) {
+            console.error('Bulk price check failed:', error);
+            this.showToast(`Price check error on batch ${batch}: ${error.message}`, 'error');
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
