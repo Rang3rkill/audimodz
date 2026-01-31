@@ -753,11 +753,9 @@ async function scrapeTemuAllTabs() {
       lastCount = allItems.size;
     }
   } else {
-    // Process All tab first, then other tabs to catch items that only appear
-    // under specific filters (Local warehouse, Standard shipping, etc.)
+    // Only scrape the All tab — it has everything. Other tabs are duplicates.
     const allTab = tabs.find(t => t.textContent?.includes('All'));
-    const otherTabs = tabs.filter(t => !t.textContent?.includes('All'));
-    const tabsToProcess = allTab ? [allTab, ...otherTabs] : tabs;
+    const tabsToProcess = allTab ? [allTab] : [tabs[0]];
 
     for (let i = 0; i < tabsToProcess.length; i++) {
       const tab = tabsToProcess[i];
