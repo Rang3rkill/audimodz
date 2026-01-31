@@ -753,11 +753,11 @@ async function scrapeTemuAllTabs() {
       lastCount = allItems.size;
     }
   } else {
-    // Only process the "All" tab - it contains every item already.
-    // Processing other tabs (Local warehouse, Standard shipping, etc.) just duplicates
-    // work and can triple the scrape time for no benefit.
+    // Process All tab first, then other tabs to catch items that only appear
+    // under specific filters (Local warehouse, Standard shipping, etc.)
     const allTab = tabs.find(t => t.textContent?.includes('All'));
-    const tabsToProcess = allTab ? [allTab] : [tabs[0]];
+    const otherTabs = tabs.filter(t => !t.textContent?.includes('All'));
+    const tabsToProcess = allTab ? [allTab, ...otherTabs] : tabs;
 
     for (let i = 0; i < tabsToProcess.length; i++) {
       const tab = tabsToProcess[i];
