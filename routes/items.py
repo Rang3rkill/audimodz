@@ -535,17 +535,24 @@ def scrape_temu_product(url):
         except Exception:
             pass
 
-    # Extract goods_id from app-style URLs like /product-name_p_12345.html
-    if 'goods_id=' not in url:
+    # Extract goods_id for API-based scraping
+    goods_id = None
+    if 'goods_id=' in url:
+        gid_match = re.search(r'goods_id=(\d+)', url)
+        if gid_match:
+            goods_id = gid_match.group(1)
+    if not goods_id:
         id_match = re.search(r'_p_(\d+)\.html', url)
         if not id_match:
             id_match = re.search(r'/product/(\d+)', url)
         if not id_match:
             id_match = re.search(r'subject_id=(\d+)', url)
         if id_match:
-            # Normalize to standard goods_id URL for reliable scraping
             goods_id = id_match.group(1)
-            url = f'https://www.temu.com/goods.html?goods_id={goods_id}'
+
+    # Normalize URL
+    if goods_id and 'goods_id=' not in url:
+        url = f'https://www.temu.com/goods.html?goods_id={goods_id}'
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -561,90 +568,133 @@ def scrape_temu_product(url):
         'Cache-Control': 'max-age=0',
     }
 
-    response = requests.get(url, headers=headers, timeout=20)
-    response.raise_for_status()
-    html = response.text
-
     data = {}
 
-    # Extract title - multiple patterns for reliability
-    title_patterns = [
-        r'"goods_name"\s*:\s*"([^"]+)"',
-        r'"goodsName"\s*:\s*"([^"]+)"',
-        r'"title"\s*:\s*"([^"]+)"',
-        r'"productName"\s*:\s*"([^"]+)"',
-        r'<meta property="og:title" content="([^"]+)"',
-        r'<title>([^<|]+)',
-        r'"name"\s*:\s*"([^"]+)"',
-    ]
-    for pattern in title_patterns:
-        match = re.search(pattern, html)
-        if match:
-            title = match.group(1)
-            # Clean up escaped characters
-            try:
-                if '\\u' in title:
-                    title = title.encode().decode('unicode_escape')
-            except:
-                pass
-            title = title.strip()
-            # Filter out generic titles
-            if len(title) > 5 and len(title) < 500 and 'Temu' not in title:
-                data['title'] = title
-                break
+    # METHOD 1: Try Temu's API endpoint for structured data (more reliable than HTML scraping)
+    if goods_id:
+        try:
+            api_url = f'https://www.temu.com/api/poppy/v1/opt/get?goods_id={goods_id}'
+            api_headers = {
+                'User-Agent': headers['User-Agent'],
+                'Accept': 'application/json',
+                'Referer': f'https://www.temu.com/goods.html?goods_id={goods_id}',
+            }
+            api_resp = requests.get(api_url, headers=api_headers, timeout=15)
+            if api_resp.status_code == 200:
+                try:
+                    api_data = api_resp.json()
+                    # Navigate common Temu API response structures
+                    result = api_data.get('result', api_data.get('data', api_data))
+                    if isinstance(result, dict):
+                        goods = result.get('goods', result)
+                        if isinstance(goods, dict):
+                            # Title
+                            title = goods.get('goods_name') or goods.get('goodsName') or goods.get('title', '')
+                            if title and len(title) > 5:
+                                data['title'] = title
+                            # Image
+                            img = goods.get('thumb_url') or goods.get('thumbUrl') or goods.get('image') or goods.get('hdThumbUrl', '')
+                            if img and is_valid_product_image(img):
+                                data['image_url'] = img.replace('\\/', '/')
+                            # Price
+                            price_info = goods.get('priceInfo', goods)
+                            if isinstance(price_info, dict):
+                                price_val = price_info.get('price') or price_info.get('salePrice')
+                                if price_val:
+                                    p = float(price_val)
+                                    if p > 100:
+                                        p = p / 100
+                                    if 0.01 <= p <= 9999:
+                                        data['price'] = round(p, 2)
+                except (ValueError, KeyError):
+                    pass
+        except Exception:
+            pass
 
-    # Extract image URL - multiple patterns
-    image_patterns = [
-        r'"thumb_url"\s*:\s*"(https?:[^"]+)"',
-        r'"thumbUrl"\s*:\s*"(https?:[^"]+)"',
-        r'"image"\s*:\s*"(https?:[^"]+)"',
-        r'"img"\s*:\s*"(https?:[^"]+)"',
-        r'"goods_img"\s*:\s*"(https?:[^"]+)"',
-        r'"goodsImg"\s*:\s*"(https?:[^"]+)"',
-        r'"hdThumbUrl"\s*:\s*"(https?:[^"]+)"',
-        r'<meta property="og:image" content="([^"]+)"',
-        r'"image_url"\s*:\s*"(https?:[^"]+)"',
-        r'<img[^>]+src="(https://[^"]*kwcdn[^"]*)"[^>]*>',
-        r'<img[^>]+src="(https://[^"]*akamaized[^"]*)"[^>]*>',
-    ]
-    for pattern in image_patterns:
-        match = re.search(pattern, html)
-        if match:
-            img_url = match.group(1)
-            # Clean up escaped characters
-            img_url = img_url.replace('\\/', '/').replace('\\u002F', '/')
-            # Validate it's a real product image (not a placeholder/banner)
-            if is_valid_product_image(img_url):
-                data['image_url'] = img_url
-                break
+    # METHOD 2: Scrape HTML page (fallback if API didn't get everything)
+    if not data.get('image_url') or not data.get('title') or not data.get('price'):
+        try:
+            response = requests.get(url, headers=headers, timeout=20)
+            response.raise_for_status()
+            html = response.text
 
-    # Extract price - multiple patterns with validation
-    price_patterns = [
-        r'"priceInfo"[^}]*"price"\s*:\s*(\d+)',  # Price in cents
-        r'"salePrice"\s*:\s*(\d+\.?\d*)',
-        r'"price"\s*:\s*(\d+\.?\d*)',
-        r'"sale_price"\s*:\s*(\d+\.?\d*)',
-        r'"current_price"\s*:\s*(\d+\.?\d*)',
-        r'"displayPrice"\s*:\s*"?\$?(\d+\.?\d*)"?',
-        r'<meta property="product:price:amount" content="(\d+\.?\d*)"',
-        r'\$(\d+\.?\d{2})',  # Standard price format
-    ]
-    for pattern in price_patterns:
-        matches = re.findall(pattern, html)
-        for match in matches:
-            try:
-                price = float(match)
-                # Temu often stores prices in cents
-                if price > 100 and '.' not in str(match):
-                    price = price / 100
-                # Validate reasonable price
-                if 0.01 <= price <= 9999:
-                    data['price'] = round(price, 2)
-                    break
-            except ValueError:
-                continue
-        if 'price' in data:
-            break
+            # Extract title - multiple patterns for reliability
+            if not data.get('title'):
+                title_patterns = [
+                    r'"goods_name"\s*:\s*"([^"]+)"',
+                    r'"goodsName"\s*:\s*"([^"]+)"',
+                    r'"title"\s*:\s*"([^"]+)"',
+                    r'"productName"\s*:\s*"([^"]+)"',
+                    r'<meta property="og:title" content="([^"]+)"',
+                    r'<title>([^<|]+)',
+                    r'"name"\s*:\s*"([^"]+)"',
+                ]
+                for pattern in title_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        title = match.group(1)
+                        try:
+                            if '\\u' in title:
+                                title = title.encode().decode('unicode_escape')
+                        except:
+                            pass
+                        title = title.strip()
+                        if len(title) > 5 and len(title) < 500 and 'Temu' not in title:
+                            data['title'] = title
+                            break
+
+            # Extract image URL - multiple patterns
+            if not data.get('image_url'):
+                image_patterns = [
+                    r'"thumb_url"\s*:\s*"(https?:[^"]+)"',
+                    r'"thumbUrl"\s*:\s*"(https?:[^"]+)"',
+                    r'"image"\s*:\s*"(https?:[^"]+)"',
+                    r'"img"\s*:\s*"(https?:[^"]+)"',
+                    r'"goods_img"\s*:\s*"(https?:[^"]+)"',
+                    r'"goodsImg"\s*:\s*"(https?:[^"]+)"',
+                    r'"hdThumbUrl"\s*:\s*"(https?:[^"]+)"',
+                    r'<meta property="og:image" content="([^"]+)"',
+                    r'"image_url"\s*:\s*"(https?:[^"]+)"',
+                    r'<img[^>]+src="(https://[^"]*kwcdn[^"]*)"[^>]*>',
+                    r'<img[^>]+src="(https://[^"]*akamaized[^"]*)"[^>]*>',
+                ]
+                for pattern in image_patterns:
+                    match = re.search(pattern, html)
+                    if match:
+                        img_url = match.group(1)
+                        img_url = img_url.replace('\\/', '/').replace('\\u002F', '/')
+                        if is_valid_product_image(img_url):
+                            data['image_url'] = img_url
+                            break
+
+            # Extract price - multiple patterns with validation
+            if not data.get('price'):
+                price_patterns = [
+                    r'"priceInfo"[^}]*"price"\s*:\s*(\d+)',
+                    r'"salePrice"\s*:\s*(\d+\.?\d*)',
+                    r'"price"\s*:\s*(\d+\.?\d*)',
+                    r'"sale_price"\s*:\s*(\d+\.?\d*)',
+                    r'"current_price"\s*:\s*(\d+\.?\d*)',
+                    r'"displayPrice"\s*:\s*"?\$?(\d+\.?\d*)"?',
+                    r'<meta property="product:price:amount" content="(\d+\.?\d*)"',
+                    r'\$(\d+\.?\d{2})',
+                ]
+                for pattern in price_patterns:
+                    matches = re.findall(pattern, html)
+                    for match in matches:
+                        try:
+                            price = float(match)
+                            if price > 100 and '.' not in str(match):
+                                price = price / 100
+                            if 0.01 <= price <= 9999:
+                                data['price'] = round(price, 2)
+                                break
+                        except ValueError:
+                            continue
+                    if 'price' in data:
+                        break
+        except Exception:
+            pass
 
     # Fall back to embedded thumb_url from product URL if scrape didn't find an image
     if not data.get('image_url') and embedded_thumb:
