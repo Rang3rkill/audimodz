@@ -1440,26 +1440,22 @@ const App = {
         const btn = this.elements.refreshMissingData;
         if (!btn) return;
 
-        // Count items missing data
-        const missingItems = this.items.filter(i => !i.image_url || i.current_price === null);
-        if (missingItems.length === 0) {
-            // Double-check with server stats which also validates image quality
-            try {
-                const stats = await this.api('/api/items/stats');
-                if (stats.missing_any > 0) {
-                    if (!confirm(`${stats.missing_any} items have bad/placeholder images or missing prices.\n\nRefresh them now?`)) return;
-                } else {
-                    this.showToast('All items have complete data!', 'success');
-                    return;
-                }
-            } catch(e) {
-                this.showToast('All items have complete data!', 'success');
-                return;
-            }
+        // Check server-side for missing data (includes bad image detection)
+        let missingCount = 0;
+        try {
+            const stats = await this.api('/api/items/stats');
+            missingCount = stats.missing_any || 0;
+        } catch(e) {
+            // Fall back to local check
+            missingCount = this.items.filter(i => !i.image_url || i.current_price === null).length;
         }
 
-        // Confirm
-        if (!confirm(`Refresh data for ${missingItems.length} items?\n\nThis may take a while as each product page needs to be fetched.`)) {
+        if (missingCount === 0) {
+            this.showToast('All items have complete data!', 'success');
+            return;
+        }
+
+        if (!confirm(`${missingCount} items have missing or bad data.\n\nThis will attempt to refresh prices and fill in missing images.\n\nContinue?`)) {
             return;
         }
 
@@ -1471,6 +1467,8 @@ const App = {
         try {
             const result = await this.api('/api/items/refresh-missing', {
                 method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ limit: 50 })
             });
 
             // Reload items to show updated data
