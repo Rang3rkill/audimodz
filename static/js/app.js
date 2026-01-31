@@ -1437,8 +1437,19 @@ const App = {
         // Count items missing data
         const missingItems = this.items.filter(i => !i.image_url || i.current_price === null);
         if (missingItems.length === 0) {
-            this.showToast('All items have complete data!', 'success');
-            return;
+            // Double-check with server stats which also validates image quality
+            try {
+                const stats = await this.api('/api/items/stats');
+                if (stats.missing_any > 0) {
+                    if (!confirm(`${stats.missing_any} items have bad/placeholder images or missing prices.\n\nRefresh them now?`)) return;
+                } else {
+                    this.showToast('All items have complete data!', 'success');
+                    return;
+                }
+            } catch(e) {
+                this.showToast('All items have complete data!', 'success');
+                return;
+            }
         }
 
         // Confirm
@@ -1486,7 +1497,18 @@ const App = {
             return;
         }
 
-        if (!confirm(`Refresh pictures for ${totalWithUrl} items?\n\nFor best results, use the "Refresh All Images" button in the Chrome extension while on your Temu cart page.\n\nThis server-side method has limited success since Temu loads images via JavaScript. Continue anyway?`)) {
+        // Check server-side for bad images count
+        let badImageCount = 0;
+        try {
+            const stats = await this.api('/api/items/stats');
+            badImageCount = stats.missing_image || 0;
+        } catch(e) {}
+
+        const msg = badImageCount > 0
+            ? `Found ${badImageCount} items with missing/bad images out of ${totalWithUrl} total.\n\nThis will process ALL items in batches (items with bad images first).\n\nFor best results, also use "Refresh All Images" in the Chrome extension on your Temu cart page.\n\nContinue?`
+            : `Refresh pictures for ${totalWithUrl} items?\n\nThis will process all items in batches.\n\nContinue?`;
+
+        if (!confirm(msg)) {
             return;
         }
 
@@ -1498,16 +1520,17 @@ const App = {
         let totalProcessed = 0;
         let remaining = totalWithUrl;
         let batch = 0;
+        const BATCH_SIZE = 50;
 
         try {
             while (remaining > 0) {
                 batch++;
-                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch}...`;
+                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch} (${totalProcessed}/${totalWithUrl})...`;
 
                 const result = await this.api('/api/items/refresh-pictures', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ limit: 50 })
+                    body: JSON.stringify({ limit: BATCH_SIZE, offset: totalProcessed })
                 });
 
                 totalRefreshed += result.refreshed || 0;
@@ -1516,21 +1539,25 @@ const App = {
                 remaining = (result.total || 0) - totalProcessed;
 
                 if ((result.processed || 0) === 0) break;
-                // Only one batch for now to avoid overloading
-                break;
+
+                // Brief pause between batches to avoid hammering the server
+                if (remaining > 0) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
             }
 
             await this.loadItems();
             this.renderItems();
 
+            const badRemaining = this.items.filter(i => !i.image_url).length;
             if (totalRefreshed > 0) {
-                this.showToast(`Updated ${totalRefreshed} pictures (${totalFailed} failed)`, 'success');
+                this.showToast(`Updated ${totalRefreshed} pictures across ${batch} batches (${totalFailed} failed)`, 'success');
             } else {
-                this.showToast(`Pictures checked - all up to date (${totalFailed} failed)`, 'info');
+                this.showToast(`All ${totalProcessed} pictures checked - no updates found (${totalFailed} failed). Use extension for best results.`, 'info');
             }
         } catch (error) {
             console.error('Bulk picture refresh failed:', error);
-            this.showToast('Failed to refresh pictures', 'error');
+            this.showToast(`Refreshed ${totalRefreshed} so far. Error on batch ${batch}: ${error.message}`, 'error');
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
