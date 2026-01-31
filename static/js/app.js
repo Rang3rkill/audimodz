@@ -161,6 +161,7 @@ const App = {
             missingDataList: document.getElementById('missingDataList'),
             refreshMissingData: document.getElementById('refreshMissingData'),
             refreshPictures: document.getElementById('refreshPictures'),
+            cleanBadImages: document.getElementById('cleanBadImages'),
             // Duplicates
             duplicateCount: document.getElementById('duplicateCount'),
             duplicatesList: document.getElementById('duplicatesList'),
@@ -263,6 +264,11 @@ const App = {
         // Bulk refresh pictures
         this.elements.refreshPictures?.addEventListener('click', () => {
             this.bulkRefreshPictures();
+        });
+
+        // Clean bad images
+        this.elements.cleanBadImages?.addEventListener('click', () => {
+            this.cleanBadImages();
         });
 
         // Filter chips
@@ -1558,6 +1564,38 @@ const App = {
         } catch (error) {
             console.error('Bulk picture refresh failed:', error);
             this.showToast(`Refreshed ${totalRefreshed} so far. Error on batch ${batch}: ${error.message}`, 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    },
+
+    // Clean bad/duplicate images that were set by server-side scraping
+    async cleanBadImages() {
+        const btn = this.elements.cleanBadImages;
+        if (!btn) return;
+
+        if (!confirm('This will:\n\n1. Find images shared by 3+ items (generic placeholders) and clear them\n2. Restore correct images from the Chrome extension where available\n\nAfter cleaning, use the Chrome extension\'s "Refresh All Images" on your Temu cart page to re-fetch correct images.\n\nContinue?')) {
+            return;
+        }
+
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner">&#8987;</span> Cleaning...';
+        btn.disabled = true;
+
+        try {
+            const result = await this.api('/api/items/clean-bad-images', {
+                method: 'POST',
+            });
+
+            await this.loadItems();
+            this.renderItems();
+
+            const msg = `Cleaned ${result.cleared} bad images, restored ${result.restored_from_extension} from extension. Found ${result.duplicate_image_urls} duplicate image URLs.`;
+            this.showToast(msg, result.cleared > 0 || result.restored_from_extension > 0 ? 'success' : 'info');
+        } catch (error) {
+            console.error('Clean bad images failed:', error);
+            this.showToast('Failed to clean bad images', 'error');
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
