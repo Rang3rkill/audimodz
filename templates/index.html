@@ -34,6 +34,9 @@
         <button class="filter-chip" data-filter="ready" title="Items in cart">
             <span class="chip-icon">&#10003;</span> In Cart
         </button>
+        <button class="filter-chip warning" data-filter="unavailable" title="Unavailable items">
+            <span class="chip-icon">&#10007;</span> Unavailable <span class="chip-count" id="unavailableFilterCount"></span>
+        </button>
     </div>
     <div class="filter-actions">
         <select id="sortSelect" class="sort-dropdown" title="Sort items">
@@ -225,6 +228,12 @@
             <div class="form-group">
                 <label for="editItemNotes">Notes (private)</label>
                 <textarea id="editItemNotes" placeholder="Add notes about this item..."></textarea>
+            </div>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="editItemUnavailable">
+                    Mark as unavailable
+                </label>
             </div>
             <div class="form-row">
                 <button type="submit" class="btn btn-primary">Save Changes</button>

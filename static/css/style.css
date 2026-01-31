@@ -2391,3 +2391,67 @@ form {
     .time-display { font-size: 20px; }
     .balance-amount { font-size: 18px; }
 }
+
+/* Unavailable items */
+.item-card.unavailable {
+    opacity: 0.55;
+    filter: grayscale(40%);
+    position: relative;
+}
+
+.item-card.unavailable:hover {
+    opacity: 0.8;
+}
+
+.unavailable-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: #ef4444;
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    z-index: 5;
+}
+
+.unavailable-section {
+    grid-column: 1 / -1;
+    margin-top: 16px;
+}
+
+.unavailable-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 12px 16px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    color: #991b1b;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.unavailable-toggle:hover {
+    background: #fee2e2;
+}
+
+.unavailable-arrow {
+    font-size: 12px;
+    transition: transform 0.2s;
+}
+
+.unavailable-items {
+    display: contents;
+}
+
+.unavailable-items.collapsed {
+    display: none;
+}
