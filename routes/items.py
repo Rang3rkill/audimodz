@@ -56,6 +56,17 @@ def has_valid_image(item):
     return is_valid_product_image(url)
 
 
+def extract_goods_id(url):
+    """Extract goods_id from any Temu URL format (web, app, share links)."""
+    if not url:
+        return None
+    for pattern in [r'goods_id=(\d+)', r'_p_(\d+)\.html', r'/product/(\d+)', r'subject_id=(\d+)']:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+
 # Rate limiting for scraping
 SCRAPE_DELAY = 1.0  # seconds between scrape requests
 last_scrape_time = 0
@@ -1009,13 +1020,12 @@ def update_images():
 
     items = Item.get_all()
 
-    # Build a lookup: goods_id -> item
+    # Build a lookup: goods_id -> item (support both web and app URL formats)
     goods_id_map = {}
     for item in items:
-        product_url = item.get('product_url', '')
-        match = re.search(r'goods_id=(\d+)', product_url)
-        if match:
-            goods_id_map[match.group(1)] = item
+        gid = extract_goods_id(item.get('product_url', ''))
+        if gid:
+            goods_id_map[gid] = item
 
     updated = 0
     for update in updates:
@@ -1143,19 +1153,8 @@ def import_from_link():
     if 'temu.com' not in url:
         return jsonify({'error': 'Only Temu links are supported right now'}), 400
 
-    # Extract product ID from URL - try multiple patterns (browser + app URLs)
-    product_id = None
-    id_patterns = [
-        r'goods_id=(\d+)',
-        r'_p_(\d+)\.html',
-        r'/product/(\d+)',
-        r'subject_id=(\d+)',
-    ]
-    for pattern in id_patterns:
-        id_match = re.search(pattern, url)
-        if id_match:
-            product_id = id_match.group(1)
-            break
+    # Extract product ID from URL
+    product_id = extract_goods_id(url)
 
     # Also try share.temu.com short links - follow redirect
     if 'share.temu.com' in url or not product_id:
@@ -1163,11 +1162,7 @@ def import_from_link():
             resp = requests.head(url, allow_redirects=True, timeout=10,
                                  headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'})
             url = resp.url
-            for pattern in id_patterns:
-                id_match = re.search(pattern, url)
-                if id_match:
-                    product_id = id_match.group(1)
-                    break
+            product_id = extract_goods_id(url) or product_id
         except Exception:
             pass
 

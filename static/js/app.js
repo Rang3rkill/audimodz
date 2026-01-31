@@ -253,7 +253,7 @@ const App = {
 
         // Refresh prices
         this.elements.refreshPrices?.addEventListener('click', () => {
-            alert('Price refresh will be available once the Chrome extension is installed.');
+            this.bulkRefreshPrices();
         });
 
         // Refresh missing data (images/prices)
@@ -1440,26 +1440,22 @@ const App = {
         const btn = this.elements.refreshMissingData;
         if (!btn) return;
 
-        // Count items missing data
-        const missingItems = this.items.filter(i => !i.image_url || i.current_price === null);
-        if (missingItems.length === 0) {
-            // Double-check with server stats which also validates image quality
-            try {
-                const stats = await this.api('/api/items/stats');
-                if (stats.missing_any > 0) {
-                    if (!confirm(`${stats.missing_any} items have bad/placeholder images or missing prices.\n\nRefresh them now?`)) return;
-                } else {
-                    this.showToast('All items have complete data!', 'success');
-                    return;
-                }
-            } catch(e) {
-                this.showToast('All items have complete data!', 'success');
-                return;
-            }
+        // Check server-side for missing data (includes bad image detection)
+        let missingCount = 0;
+        try {
+            const stats = await this.api('/api/items/stats');
+            missingCount = stats.missing_any || 0;
+        } catch(e) {
+            // Fall back to local check
+            missingCount = this.items.filter(i => !i.image_url || i.current_price === null).length;
         }
 
-        // Confirm
-        if (!confirm(`Refresh data for ${missingItems.length} items?\n\nThis may take a while as each product page needs to be fetched.`)) {
+        if (missingCount === 0) {
+            this.showToast('All items have complete data!', 'success');
+            return;
+        }
+
+        if (!confirm(`${missingCount} items have missing or bad data.\n\nThis will attempt to refresh prices and fill in missing images.\n\nContinue?`)) {
             return;
         }
 
@@ -1471,6 +1467,8 @@ const App = {
         try {
             const result = await this.api('/api/items/refresh-missing', {
                 method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ limit: 50 })
             });
 
             // Reload items to show updated data
@@ -1596,6 +1594,75 @@ const App = {
         } catch (error) {
             console.error('Clean bad images failed:', error);
             this.showToast('Failed to clean bad images', 'error');
+        } finally {
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+        }
+    },
+
+    // Bulk refresh prices for all items
+    async bulkRefreshPrices() {
+        const btn = this.elements.refreshPrices;
+        if (!btn) return;
+
+        const totalWithUrl = this.items.filter(i => i.product_url).length;
+        if (totalWithUrl === 0) {
+            this.showToast('No items with product URLs to check', 'warning');
+            return;
+        }
+
+        if (!confirm(`Check prices for ${totalWithUrl} items?\n\nThis will process items in batches and may take a while.`)) {
+            return;
+        }
+
+        const originalHtml = btn.innerHTML;
+        btn.disabled = true;
+
+        let totalChecked = 0;
+        let totalUpdated = 0;
+        let totalDrops = 0;
+        let totalIncreases = 0;
+        let totalFailed = 0;
+        let batch = 0;
+        const BATCH_SIZE = 50;
+        let remaining = totalWithUrl;
+
+        try {
+            while (remaining > 0) {
+                batch++;
+                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch} (${totalChecked}/${totalWithUrl})...`;
+
+                const result = await this.api('/api/items/price-check', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ limit: BATCH_SIZE })
+                });
+
+                totalChecked += result.checked || 0;
+                totalUpdated += result.updated || 0;
+                totalDrops += result.price_drops || 0;
+                totalIncreases += result.price_increases || 0;
+                totalFailed += result.failed || 0;
+                remaining = totalWithUrl - totalChecked - totalFailed;
+
+                if ((result.checked || 0) === 0 && (result.failed || 0) === 0) break;
+
+                if (remaining > 0) {
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+            }
+
+            await this.loadItems();
+            this.renderItems();
+
+            if (totalUpdated > 0) {
+                this.showToast(`Checked ${totalChecked} prices: ${totalDrops} drops, ${totalIncreases} increases`, 'success');
+            } else {
+                this.showToast(`Checked ${totalChecked} prices - no changes found`, 'info');
+            }
+        } catch (error) {
+            console.error('Bulk price check failed:', error);
+            this.showToast(`Price check error on batch ${batch}: ${error.message}`, 'error');
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;

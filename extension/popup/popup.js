@@ -753,18 +753,14 @@ async function scrapeTemuAllTabs() {
       lastCount = allItems.size;
     }
   } else {
-    // ALWAYS process ALL tabs including "All" to catch everything
-    // Start with "All" tab first to get the most items, then check other tabs for any missed
+    // Only scrape the All tab — it has everything. Other tabs are duplicates.
     const allTab = tabs.find(t => t.textContent?.includes('All'));
-    const otherTabs = tabs.filter(t => !t.textContent?.includes('All'));
-
-    // Reorder: All tab first, then others
-    const tabsToProcess = allTab ? [allTab, ...otherTabs] : tabs;
+    const tabsToProcess = allTab ? [allTab] : [tabs[0]];
 
     for (let i = 0; i < tabsToProcess.length; i++) {
       const tab = tabsToProcess[i];
       const tabName = tab.textContent?.trim() || `Tab ${i + 1}`;
-      console.log(`[Judi\'s Wishlist] Processing tab ${i + 1}/${tabsToProcess.length}: ${tabName}`);
+      console.log(`[Judi\'s Wishlist] Processing tab: ${tabName}`);
 
       // Click the tab - try multiple approaches
       // First scroll the tab into view
