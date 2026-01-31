@@ -112,6 +112,8 @@ const App = {
             editItemList: document.getElementById('editItemList'),
             editItemQuantity: document.getElementById('editItemQuantity'),
             editItemNotes: document.getElementById('editItemNotes'),
+            editItemImageUrl: document.getElementById('editItemImageUrl'),
+            editItemImagePreview: document.getElementById('editItemImagePreview'),
             deleteItemBtn: document.getElementById('deleteItemBtn'),
             // Import from link
             importLinkBtn: document.getElementById('importLinkBtn'),
@@ -421,6 +423,18 @@ const App = {
         });
 
         // Edit item form
+        this.elements.editItemImageUrl?.addEventListener('input', (e) => {
+            const url = e.target.value.trim();
+            const preview = this.elements.editItemImagePreview;
+            if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+                preview.src = url;
+                preview.style.display = 'block';
+                preview.onerror = () => { preview.style.display = 'none'; };
+            } else {
+                preview.style.display = 'none';
+            }
+        });
+
         this.elements.editItemForm?.addEventListener('submit', (e) => {
             e.preventDefault();
             this.saveItemEdit();
@@ -2348,6 +2362,17 @@ const App = {
         if (this.elements.editItemNotes) {
             this.elements.editItemNotes.value = item.notes || '';
         }
+        if (this.elements.editItemImageUrl) {
+            this.elements.editItemImageUrl.value = item.image_url || '';
+            const preview = this.elements.editItemImagePreview;
+            if (item.image_url) {
+                preview.src = item.image_url;
+                preview.style.display = 'block';
+                preview.onerror = () => { preview.style.display = 'none'; };
+            } else {
+                preview.style.display = 'none';
+            }
+        }
 
         this.elements.editItemModal.classList.remove('hidden');
     },
@@ -2362,6 +2387,12 @@ const App = {
 
         if (this.elements.editItemNotes) {
             updates.notes = this.elements.editItemNotes.value || null;
+        }
+        if (this.elements.editItemImageUrl) {
+            const imgUrl = this.elements.editItemImageUrl.value.trim();
+            if (imgUrl !== undefined) {
+                updates.image_url = imgUrl || null;
+            }
         }
 
         try {
