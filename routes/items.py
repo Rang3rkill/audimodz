@@ -454,6 +454,17 @@ def scrape_temu_product(url):
     """Scrape product data from a Temu product page with retry logic."""
     rate_limit_scrape()
 
+    # Check if thumb_url is embedded in the product URL (set by extension)
+    embedded_thumb = None
+    from urllib.parse import urlparse, parse_qs, unquote
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        if 'thumb_url' in params:
+            embedded_thumb = unquote(params['thumb_url'][0])
+    except Exception:
+        pass
+
     # Handle app-style URLs: follow redirects for share links and normalize URLs
     if 'share.temu.com' in url:
         try:
@@ -573,6 +584,10 @@ def scrape_temu_product(url):
                 continue
         if 'price' in data:
             break
+
+    # Fall back to embedded thumb_url from product URL if scrape didn't find an image
+    if not data.get('image_url') and embedded_thumb:
+        data['image_url'] = embedded_thumb
 
     return data if data else None
 
@@ -815,6 +830,59 @@ def refresh_pictures():
         'failed': failed,
         'processed': len(target_items),
         'total': len([i for i in items if i.get('product_url')])
+    })
+
+
+@items_bp.route('/update-images', methods=['POST'])
+def update_images():
+    """Accept image URL updates pushed from the browser extension.
+
+    Expects JSON: { "updates": [ { "goods_id": "123", "image_url": "https://..." }, ... ] }
+    Matches items by goods_id in their product_url and updates the image.
+    """
+    data = request.get_json() or {}
+    updates = data.get('updates', [])
+
+    if not updates:
+        return jsonify({'success': True, 'updated': 0, 'message': 'No updates provided'})
+
+    items = Item.get_all()
+
+    # Build a lookup: goods_id -> item
+    goods_id_map = {}
+    for item in items:
+        product_url = item.get('product_url', '')
+        match = re.search(r'goods_id=(\d+)', product_url)
+        if match:
+            goods_id_map[match.group(1)] = item
+
+    updated = 0
+    for update in updates:
+        goods_id = str(update.get('goods_id', ''))
+        new_image = update.get('image_url', '')
+        if not goods_id or not new_image:
+            continue
+
+        item = goods_id_map.get(goods_id)
+        if not item:
+            continue
+
+        # Update image and also embed thumb_url in product_url for future refreshes
+        item_updates = {'image_url': new_image, 'last_checked': datetime.now().isoformat()}
+
+        # Update product_url to include thumb_url if not already there
+        product_url = item.get('product_url', '')
+        if 'thumb_url=' not in product_url:
+            from urllib.parse import urlencode, quote
+            item_updates['product_url'] = product_url + '&thumb_url=' + quote(new_image, safe='')
+
+        Item.update(item['id'], **item_updates)
+        updated += 1
+
+    return jsonify({
+        'success': True,
+        'updated': updated,
+        'total': len(updates)
     })
 
 

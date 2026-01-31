@@ -352,6 +352,10 @@ h1 {
   cursor: not-allowed;
 }
 
+#refreshImagesBtn {
+  margin-top: 12px;
+}
+
 .hidden {
   display: none !important;
 }

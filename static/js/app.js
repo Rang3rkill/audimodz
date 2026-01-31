@@ -1486,7 +1486,7 @@ const App = {
             return;
         }
 
-        if (!confirm(`Refresh pictures for ${totalWithUrl} items?\n\nThis re-scrapes each product page for updated images. It processes 50 at a time and may take a while.`)) {
+        if (!confirm(`Refresh pictures for ${totalWithUrl} items?\n\nFor best results, use the "Refresh All Images" button in the Chrome extension while on your Temu cart page.\n\nThis server-side method has limited success since Temu loads images via JavaScript. Continue anyway?`)) {
             return;
         }
 

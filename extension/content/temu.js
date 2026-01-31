@@ -69,9 +69,13 @@ function extractTemuProductId(href) {
   return null;
 }
 
-// Build clean product URL
-function buildTemuProductUrl(goodsId) {
-  return `https://www.temu.com/goods.html?goods_id=${goodsId}`;
+// Build clean product URL, optionally embedding the thumbnail for server-side recovery
+function buildTemuProductUrl(goodsId, imageUrl) {
+  let url = `https://www.temu.com/goods.html?goods_id=${goodsId}`;
+  if (imageUrl) {
+    url += `&thumb_url=${encodeURIComponent(imageUrl)}`;
+  }
+  return url;
 }
 
 // Try multiple selectors and return first match
@@ -253,7 +257,7 @@ function scrapeTemuCart() {
 
     const item = {
       product_id: productId,
-      product_url: buildTemuProductUrl(productId),
+      product_url: buildTemuProductUrl(productId, imageUrl),
       title: title,
       image_url: imageUrl,
       price: price,
