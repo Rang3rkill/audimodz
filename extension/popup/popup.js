@@ -352,6 +352,37 @@ function scrollToLoadAllItems() {
   });
 }
 
+// Helper: pick the best sale/current price from a Temu data object.
+// Temu stores `price` = original full price, `salePrice` = discounted price.
+// We want the sale price (what the customer actually pays).
+function pickBestPrice(obj) {
+  // Try sale/discount price fields first (the actual price to pay)
+  const candidates = [
+    obj.sale_price, obj.salePrice, obj.salePriceCent,
+    obj.promo_price, obj.promoPrice,
+    obj.discount_price, obj.discountPrice,
+    obj.current_price, obj.currentPrice,
+    obj.price, obj.priceCent,
+  ];
+  let best = null;
+  let original = null;
+  for (const v of candidates) {
+    const n = parseFloat(v);
+    if (!isNaN(n) && n > 0) {
+      if (best === null) best = n;
+      // Keep going to find the highest as original_price
+      if (original === null || n > original) original = n;
+    }
+  }
+  // Normalize cents (Temu sometimes returns 1299 meaning $12.99)
+  if (best !== null && best > 100 && Number.isInteger(best)) best = best / 100;
+  if (original !== null && original > 100 && Number.isInteger(original)) original = original / 100;
+  // Validate range
+  if (best !== null && (best < 0.01 || best > 99999)) best = null;
+  if (original !== null && (original < 0.01 || original > 99999)) original = null;
+  return { salePrice: best, originalPrice: original };
+}
+
 // Multi-tab scraper for Temu - clicks through each filter tab and collects all items
 // This runs in the context of the page
 async function scrapeTemuAllTabs() {
@@ -360,8 +391,105 @@ async function scrapeTemuAllTabs() {
 
   console.log('[Judi\'s Wishlist] === MULTI-TAB SCRAPER ===');
 
+  // === METHOD 0: Intercept Temu's cart API directly ===
+  // Temu's frontend fetches cart data from its own API. We call it directly
+  // using the user's session cookies (extension has host_permissions on temu.com).
+  // This returns structured JSON — no DOM scraping needed.
+  console.log('[Judi\'s Wishlist] METHOD 0: Trying direct cart API call...');
+  try {
+    const cartApiEndpoints = [
+      '/api/bg/quiet/cart/query',
+      '/api/server/_stk/query/cart/listCart',
+      '/api/phantom/cart/get',
+    ];
+    for (const endpoint of cartApiEndpoints) {
+      try {
+        const apiResp = await fetch(`https://www.temu.com${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        });
+        if (!apiResp.ok) continue;
+        const apiJson = await apiResp.json();
+        console.log(`[Judi's Wishlist] Cart API ${endpoint} responded:`, Object.keys(apiJson));
+
+        // Navigate Temu's response structure to find cart items array
+        const possiblePaths = [
+          apiJson?.result?.cartGroupList,
+          apiJson?.result?.goodsList,
+          apiJson?.result?.items,
+          apiJson?.data?.cartGroupList,
+          apiJson?.data?.goodsList,
+          apiJson?.data?.items,
+          apiJson?.cartGroupList,
+          apiJson?.goodsList,
+        ];
+
+        let cartGroups = null;
+        for (const p of possiblePaths) {
+          if (Array.isArray(p) && p.length > 0) { cartGroups = p; break; }
+        }
+        if (!cartGroups) continue;
+
+        // Cart groups may contain sub-items (e.g., grouped by warehouse)
+        const flatItems = [];
+        for (const group of cartGroups) {
+          if (group.goods_id || group.goodsId) {
+            flatItems.push(group);
+          }
+          // Sub-items within a group
+          const subItems = group.cartItemList || group.goodsList || group.items || group.cartGoods || [];
+          if (Array.isArray(subItems)) {
+            flatItems.push(...subItems);
+          }
+        }
+
+        console.log(`[Judi's Wishlist] Found ${flatItems.length} items from cart API`);
+
+        for (const item of flatItems) {
+          const productId = String(item.goods_id || item.goodsId || item.product_id || item.subjectId || '');
+          if (!productId || allItems.has(productId)) continue;
+
+          const image = item.thumb_url || item.thumbUrl || item.image || item.goods_img || item.hdThumbUrl || null;
+          const { salePrice, originalPrice } = pickBestPrice(item);
+
+          let productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+          if (image) productUrl += '&thumb_url=' + encodeURIComponent(image);
+
+          allItems.set(productId, {
+            product_id: productId,
+            product_url: productUrl,
+            title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
+            image_url: image,
+            price: salePrice,
+            original_price: originalPrice,
+            quantity: Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1),
+          });
+        }
+
+        if (allItems.size > 0) {
+          console.log(`[Judi's Wishlist] SUCCESS: Got ${allItems.size} items from cart API (${endpoint})`);
+          const finalItems = Array.from(allItems.values());
+          stats.total = finalItems.length;
+          stats.withImage = finalItems.filter(i => i.image_url).length;
+          stats.withPrice = finalItems.filter(i => i.price).length;
+          finalItems._stats = stats;
+          return finalItems;
+        }
+      } catch (e) {
+        console.log(`[Judi's Wishlist] Cart API ${endpoint} failed:`, e.message);
+      }
+    }
+  } catch (e) {
+    console.log('[Judi\'s Wishlist] METHOD 0 failed:', e.message);
+  }
+
   // === METHOD 1: Try to find cart data in JavaScript/JSON ===
-  console.log('[Judi\'s Wishlist] Attempting to find cart data in page JavaScript...');
+  console.log('[Judi\'s Wishlist] METHOD 1: Checking page JavaScript state...');
 
   // Look for cart data in common locations
   const dataLocations = [
@@ -388,12 +516,7 @@ async function scrapeTemuAllTabs() {
             productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
           }
 
-          let rawPrice = parseFloat(item.price || item.sale_price || item.salePrice || item.current_price);
-          // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
-          if (!isNaN(rawPrice) && rawPrice > 100 && Number.isInteger(rawPrice)) {
-            rawPrice = rawPrice / 100;
-          }
-          const validPrice = (!isNaN(rawPrice) && isFinite(rawPrice) && rawPrice > 0.01 && rawPrice < 99999) ? rawPrice : null;
+          const { salePrice, originalPrice } = pickBestPrice(item);
 
           const itemImage = item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null;
           // Embed thumb_url in product URL for server-side image recovery
@@ -407,7 +530,8 @@ async function scrapeTemuAllTabs() {
             product_url: finalUrl,
             title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
             image_url: itemImage,
-            price: validPrice,
+            price: salePrice,
+            original_price: originalPrice,
             quantity: Math.max(1, parseInt(item.quantity || item.qty) || 1),
           });
         });

@@ -1,11 +1,11 @@
 import sqlite3
 import os
-from config import DATABASE_PATH, DATA_DIR
+import config
 
 
 def get_db_connection():
     """Get a database connection with row factory."""
-    conn = sqlite3.connect(DATABASE_PATH)
+    conn = sqlite3.connect(config.DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -13,7 +13,7 @@ def get_db_connection():
 
 def init_db():
     """Initialize the database with schema and default data."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    os.makedirs(config.DATA_DIR, exist_ok=True)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -61,6 +61,7 @@ def init_db():
             date_added DATETIME DEFAULT CURRENT_TIMESTAMP,
             date_modified DATETIME DEFAULT CURRENT_TIMESTAMP,
             price_updated_at DATETIME,
+            last_checked DATETIME,
             UNIQUE(store, product_id),
             FOREIGN KEY (category_id) REFERENCES categories(id),
             FOREIGN KEY (list_id) REFERENCES lists(id)

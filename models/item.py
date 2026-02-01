@@ -137,10 +137,10 @@ class Item:
         cursor = conn.cursor()
 
         allowed_fields = {
-            'title', 'image_url', 'current_price', 'quantity',
+            'title', 'image_url', 'current_price', 'original_price', 'quantity',
             'category_id', 'list_id', 'position', 'in_ready_to_buy',
             'is_unavailable', 'last_price', 'price_updated_at',
-            'notes', 'is_favorite'
+            'notes', 'is_favorite', 'product_url'
         }
 
         updates = []

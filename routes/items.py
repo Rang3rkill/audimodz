@@ -388,7 +388,7 @@ def export_items():
                 str(item.get('id', '')),
                 item.get('store', ''),
                 item.get('product_id', ''),
-                f'"{item.get("title", "").replace('"', '""')}"',
+                '"' + item.get('title', '').replace('"', '""') + '"',
                 str(item.get('current_price', '')),
                 item.get('image_url', '') or '',
                 item.get('product_url', ''),
@@ -513,6 +513,12 @@ def import_items():
                 list_id=list_id
             )
 
+            # If extension sent a separate original_price (higher than sale),
+            # update it so price drop display works correctly
+            ext_original = item_data.get('original_price')
+            if ext_original and new_price and ext_original > new_price:
+                Item.update(item['id'], original_price=ext_original)
+
             results.append({
                 'id': item['id'],
                 'product_id': product_id,
@@ -621,16 +627,29 @@ def scrape_temu_product(url):
                             img = goods.get('thumb_url') or goods.get('thumbUrl') or goods.get('image') or goods.get('hdThumbUrl', '')
                             if img and is_valid_product_image(img):
                                 data['image_url'] = img.replace('\\/', '/')
-                            # Price
+                            # Price - prefer sale/discount price over original price
                             price_info = goods.get('priceInfo', goods)
                             if isinstance(price_info, dict):
-                                price_val = price_info.get('price') or price_info.get('salePrice')
+                                # Sale price fields first (what customer actually pays)
+                                sale_val = (price_info.get('salePrice') or price_info.get('sale_price')
+                                           or price_info.get('promoPrice') or price_info.get('discountPrice'))
+                                orig_val = price_info.get('price') or price_info.get('originalPrice')
+
+                                # Use sale price if available, otherwise fall back to price
+                                price_val = sale_val or orig_val
                                 if price_val:
                                     p = float(price_val)
-                                    if p > 100:
+                                    if p > 100 and '.' not in str(price_val):
                                         p = p / 100
                                     if 0.01 <= p <= 9999:
                                         data['price'] = round(p, 2)
+                                # Also store original price if both exist
+                                if sale_val and orig_val:
+                                    op = float(orig_val)
+                                    if op > 100 and '.' not in str(orig_val):
+                                        op = op / 100
+                                    if 0.01 <= op <= 9999:
+                                        data['original_price'] = round(op, 2)
                 except (ValueError, KeyError):
                     pass
         except Exception:
@@ -692,15 +711,18 @@ def scrape_temu_product(url):
                             data['image_url'] = img_url
                             break
 
-            # Extract price - multiple patterns with validation
+            # Extract price - sale/discount price patterns first, then original
             if not data.get('price'):
                 price_patterns = [
-                    r'"priceInfo"[^}]*"price"\s*:\s*(\d+)',
                     r'"salePrice"\s*:\s*(\d+\.?\d*)',
-                    r'"price"\s*:\s*(\d+\.?\d*)',
                     r'"sale_price"\s*:\s*(\d+\.?\d*)',
-                    r'"current_price"\s*:\s*(\d+\.?\d*)',
+                    r'"promoPrice"\s*:\s*(\d+\.?\d*)',
+                    r'"discountPrice"\s*:\s*(\d+\.?\d*)',
                     r'"displayPrice"\s*:\s*"?\$?(\d+\.?\d*)"?',
+                    r'"priceInfo"[^}]*"salePrice"\s*:\s*(\d+)',
+                    r'"priceInfo"[^}]*"price"\s*:\s*(\d+)',
+                    r'"current_price"\s*:\s*(\d+\.?\d*)',
+                    r'"price"\s*:\s*(\d+\.?\d*)',
                     r'<meta property="product:price:amount" content="(\d+\.?\d*)"',
                     r'\$(\d+\.?\d{2})',
                 ]
