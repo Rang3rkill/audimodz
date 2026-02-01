@@ -98,78 +98,82 @@ class Item:
                current_price=None, quantity=1, category_id=1, list_id=1):
         """Create a new item."""
         conn = get_db_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        # Calculate piece count from title
-        piece_count = extract_piece_count(title)
+            # Calculate piece count from title
+            piece_count = extract_piece_count(title)
 
-        # Get next position
-        cursor.execute('''
-            SELECT MAX(position) FROM items WHERE category_id = ?
-        ''', (category_id,))
-        max_pos = cursor.fetchone()[0]
-        position = (max_pos or 0) + 1
+            # Get next position
+            cursor.execute('''
+                SELECT MAX(position) FROM items WHERE category_id = ?
+            ''', (category_id,))
+            max_pos = cursor.fetchone()[0]
+            position = (max_pos or 0) + 1
 
-        now = datetime.now().isoformat()
-        cursor.execute('''
-            INSERT INTO items (
-                store, product_id, product_url, title, image_url,
-                current_price, original_price, quantity, piece_count,
-                category_id, list_id, position, price_updated_at, last_checked
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            store, str(product_id), product_url, title, image_url,
-            current_price, current_price, quantity, piece_count,
-            category_id, list_id, position,
-            now if current_price is not None else None,
-            now
-        ))
+            now = datetime.now().isoformat()
+            cursor.execute('''
+                INSERT INTO items (
+                    store, product_id, product_url, title, image_url,
+                    current_price, original_price, quantity, piece_count,
+                    category_id, list_id, position, price_updated_at, last_checked
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                store, str(product_id), product_url, title, image_url,
+                current_price, current_price, quantity, piece_count,
+                category_id, list_id, position,
+                now if current_price is not None else None,
+                now
+            ))
 
-        item_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+            item_id = cursor.lastrowid
+            conn.commit()
+        finally:
+            conn.close()
         return Item.get_by_id(item_id)
 
     @staticmethod
     def update(item_id, **kwargs):
         """Update an item with given fields."""
         conn = get_db_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        allowed_fields = {
-            'title', 'image_url', 'current_price', 'original_price', 'quantity',
-            'category_id', 'list_id', 'position', 'in_ready_to_buy',
-            'is_unavailable', 'last_price', 'price_updated_at',
-            'notes', 'is_favorite', 'product_url'
-        }
+            allowed_fields = {
+                'title', 'image_url', 'current_price', 'original_price',
+                'quantity', 'category_id', 'list_id', 'position',
+                'in_ready_to_buy', 'is_unavailable', 'last_price',
+                'price_updated_at', 'last_checked', 'notes', 'is_favorite',
+                'product_url',
+            }
 
-        updates = []
-        values = []
+            updates = []
+            values = []
 
-        for field, value in kwargs.items():
-            if field in allowed_fields:
-                updates.append(f'{field} = ?')
-                values.append(value)
+            for field, value in kwargs.items():
+                if field in allowed_fields:
+                    updates.append(f'{field} = ?')
+                    values.append(value)
 
-        if updates:
-            updates.append('date_modified = ?')
-            values.append(datetime.now().isoformat())
+            if updates:
+                updates.append('date_modified = ?')
+                values.append(datetime.now().isoformat())
 
-            # Update piece_count if title changed
-            if 'title' in kwargs:
-                piece_count = extract_piece_count(kwargs['title'])
-                updates.append('piece_count = ?')
-                values.append(piece_count)
+                # Update piece_count if title changed
+                if 'title' in kwargs:
+                    piece_count = extract_piece_count(kwargs['title'])
+                    updates.append('piece_count = ?')
+                    values.append(piece_count)
 
-            values.append(item_id)
-            cursor.execute(f'''
-                UPDATE items
-                SET {', '.join(updates)}
-                WHERE id = ?
-            ''', values)
-            conn.commit()
-
-        conn.close()
+                values.append(item_id)
+                cursor.execute(f'''
+                    UPDATE items
+                    SET {', '.join(updates)}
+                    WHERE id = ?
+                ''', values)
+                conn.commit()
+        finally:
+            conn.close()
         return Item.get_by_id(item_id)
 
     @staticmethod
@@ -187,16 +191,18 @@ class Item:
     def reorder(item_positions):
         """Bulk update item positions."""
         conn = get_db_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        for item_id, position in item_positions.items():
-            cursor.execute('''
-                UPDATE items SET position = ?, date_modified = ?
-                WHERE id = ?
-            ''', (position, datetime.now().isoformat(), item_id))
+            for item_id, position in item_positions.items():
+                cursor.execute('''
+                    UPDATE items SET position = ?, date_modified = ?
+                    WHERE id = ?
+                ''', (position, datetime.now().isoformat(), item_id))
 
-        conn.commit()
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
         return True
 
     @staticmethod
@@ -302,7 +308,8 @@ class Item:
         if oldest and oldest[0]:
             from datetime import datetime
             try:
-                oldest_date = datetime.fromisoformat(oldest[0].replace('Z', '+00:00'))
+                date_str = oldest[0].replace('Z', '').replace('+00:00', '')
+                oldest_date = datetime.fromisoformat(date_str)
                 now = datetime.now()
                 diff_days = (now - oldest_date).days
                 if diff_days == 0:
@@ -397,22 +404,15 @@ class Item:
             return []
 
         duplicates = []
-        seen_pairs = set()
 
-        for i, item1 in enumerate(items):
-            for j, item2 in enumerate(items):
-                if i >= j:
-                    continue
-
-                # Skip if already seen this pair
-                pair_key = tuple(sorted([item1['id'], item2['id']]))
-                if pair_key in seen_pairs:
-                    continue
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                item1 = items[i]
+                item2 = items[j]
 
                 similarity = Item.calculate_similarity(item1['title'], item2['title'])
 
                 if similarity >= threshold:
-                    seen_pairs.add(pair_key)
                     duplicates.append({
                         'item1': item1,
                         'item2': item2,

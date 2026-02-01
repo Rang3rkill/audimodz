@@ -409,7 +409,11 @@ const App = {
             },
             ...options,
         });
-        return response.json();
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || `Request failed (${response.status})`);
+        }
+        return data;
     },
 
     // Load all data
@@ -885,6 +889,12 @@ const App = {
         // Apply view mode class
         this.applyViewMode();
 
+        // If a filter or sort is active, delegate to applyFiltersAndSort
+        if (this.currentFilter !== 'all' || this.currentSort !== 'position') {
+            this.applyFiltersAndSort();
+            return;
+        }
+
         const filteredItems = this.getFilteredItems();
 
         if (this.items.length === 0) {
@@ -895,6 +905,7 @@ const App = {
                     <p>Use the Chrome extension to import items from Temu or Amazon, or tap the + button to add manually.</p>
                 </div>
             `;
+            this.updateFilterCounts();
             return;
         }
 
@@ -906,17 +917,44 @@ const App = {
                     <p>Try a different search term or <button class="btn-link" onclick="App.clearSearch()">clear the search</button>.</p>
                 </div>
             `;
+            this.updateFilterCounts();
             return;
         }
 
+        // Separate available and unavailable items
+        const availableItems = filteredItems.filter(i => !i.is_unavailable);
+        const unavailableItems = filteredItems.filter(i => i.is_unavailable);
+
         let html = '';
-        for (const item of filteredItems) {
+        for (const item of availableItems) {
             html += this.renderItemCard(item);
         }
+
+        // Add collapsible unavailable section
+        if (unavailableItems.length > 0) {
+            const collapsed = localStorage.getItem('unavailable_collapsed') !== 'false';
+            html += `
+                <div class="unavailable-section">
+                    <button class="unavailable-toggle" onclick="App.toggleUnavailableSection()">
+                        <span class="unavailable-arrow">${collapsed ? '&#9654;' : '&#9660;'}</span>
+                        Unavailable items (${unavailableItems.length})
+                    </button>
+                    <div class="unavailable-items ${collapsed ? 'collapsed' : ''}">
+            `;
+            for (const item of unavailableItems) {
+                html += this.renderItemCard(item);
+            }
+            html += `
+                    </div>
+                </div>
+            `;
+        }
+
         this.elements.itemsGrid.innerHTML = html;
 
         // Bind item events
         this.bindItemEvents();
+        this.updateFilterCounts();
     },
 
     // Render single item card
@@ -1951,7 +1989,10 @@ const App = {
                 items = items.filter(i => i.is_favorite);
                 break;
             case 'price-drops':
-                items = items.filter(i => i.last_price && i.current_price && i.current_price < i.last_price);
+                items = items.filter(i =>
+                    i.current_price !== null && i.original_price !== null &&
+                    i.original_price > 0 && i.current_price < i.original_price
+                );
                 break;
             case 'missing':
                 items = items.filter(i => !i.image_url || i.current_price === null);

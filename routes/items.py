@@ -4,6 +4,7 @@ from models.category import Category
 import requests
 import re
 import time
+import threading
 from datetime import datetime
 from functools import wraps
 
@@ -83,16 +84,18 @@ def ensure_thumb_url(product_url, image_url):
 
 # Rate limiting for scraping
 SCRAPE_DELAY = 1.0  # seconds between scrape requests
-last_scrape_time = 0
+_scrape_lock = threading.Lock()
+_last_scrape_time = 0
 
 
 def rate_limit_scrape():
     """Ensure we don't hit Temu too fast."""
-    global last_scrape_time
-    elapsed = time.time() - last_scrape_time
-    if elapsed < SCRAPE_DELAY:
-        time.sleep(SCRAPE_DELAY - elapsed)
-    last_scrape_time = time.time()
+    global _last_scrape_time
+    with _scrape_lock:
+        elapsed = time.time() - _last_scrape_time
+        if elapsed < SCRAPE_DELAY:
+            time.sleep(SCRAPE_DELAY - elapsed)
+        _last_scrape_time = time.time()
 
 
 def retry_on_failure(max_retries=3, delay=2):
@@ -381,27 +384,31 @@ def export_items():
     items = Item.get_all(list_id=list_id) if list_id else Item.get_all()
 
     if format_type == 'csv':
-        # Build CSV string
+        import csv
+        import io
+        # Build CSV string using csv module for proper escaping
+        output = io.StringIO()
+        writer = csv.writer(output)
         headers = ['id', 'store', 'product_id', 'title', 'current_price', 'image_url', 'product_url', 'quantity', 'is_favorite', 'in_ready_to_buy']
-        lines = [','.join(headers)]
+        writer.writerow(headers)
         for item in items:
-            row = [
-                str(item.get('id', '')),
+            writer.writerow([
+                item.get('id', ''),
                 item.get('store', ''),
                 item.get('product_id', ''),
-                '"' + item.get('title', '').replace('"', '""') + '"',
-                str(item.get('current_price', '')),
+                item.get('title', ''),
+                item.get('current_price', ''),
                 item.get('image_url', '') or '',
                 item.get('product_url', ''),
-                str(item.get('quantity', 1)),
-                str(item.get('is_favorite', 0)),
-                str(item.get('in_ready_to_buy', 0)),
-            ]
-            lines.append(','.join(row))
+                item.get('quantity', 1),
+                item.get('is_favorite', 0),
+                item.get('in_ready_to_buy', 0),
+            ])
+        csv_content = output.getvalue()
 
         from flask import Response
         return Response(
-            '\n'.join(lines),
+            csv_content,
             mimetype='text/csv',
             headers={'Content-Disposition': 'attachment; filename=wishlist_export.csv'}
         )
@@ -1228,7 +1235,7 @@ def check_prices():
     limit = data.get('limit', 20)
 
     if item_ids:
-        items = [Item.get_by_id(id) for id in item_ids if Item.get_by_id(id)]
+        items = [item for item in (Item.get_by_id(id) for id in item_ids) if item]
     else:
         # Get items that haven't been checked recently
         all_items = Item.get_all()
@@ -1257,7 +1264,7 @@ def check_prices():
             else:
                 results['failed'] += 1
                 continue
-        except:
+        except Exception:
             results['failed'] += 1
             continue
 
