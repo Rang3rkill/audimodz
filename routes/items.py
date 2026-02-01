@@ -1,5 +1,6 @@
 from flask import Blueprint, jsonify, request
 from models.item import Item
+from models.category import Category
 import requests
 import re
 import time
@@ -431,6 +432,9 @@ def import_items():
     price_increases = 0
     errors = []
 
+    # Load categories once for auto-categorization
+    all_categories = Category.get_all()
+
     for item_data in items_data:
         try:
             product_id = item_data.get('product_id')
@@ -518,6 +522,12 @@ def import_items():
             ext_original = item_data.get('original_price')
             if ext_original and new_price and ext_original > new_price:
                 Item.update(item['id'], original_price=ext_original)
+
+            # Auto-categorize based on title keywords
+            title = item_data.get('title', '')
+            cat_id = categorize_item_title(title, all_categories)
+            if cat_id:
+                Item.update(item['id'], category_id=cat_id)
 
             results.append({
                 'id': item['id'],
@@ -1368,4 +1378,316 @@ def import_from_link():
         'status': 'imported',
         'message': 'Item added to your wishlist!',
         'item': item
+    })
+
+
+# ============================================================
+# AUTO-CATEGORIZATION
+# ============================================================
+# Keyword-based category matching. Maps item titles to categories
+# by scanning for known keywords. Works with existing categories
+# and can create new ones when enough items cluster together.
+
+# Category keyword rules: { category_name: [keywords] }
+# Keywords are matched case-insensitively against item titles.
+# More specific keywords should come first within each category.
+CATEGORY_RULES = {
+    'Clothes': [
+        'dress', 'shirt', 'blouse', 'jacket', 'coat', 'pants', 'jeans',
+        'leggings', 'skirt', 'sweater', 'hoodie', 'cardigan', 'vest',
+        'romper', 'jumpsuit', 'bodysuit', 'lingerie', 'bra', 'underwear',
+        'panties', 'socks', 'stockings', 'tights', 'pajama', 'nightgown',
+        'robe', 'kimono', 'tunic', 'polo', 'tank top', 'camisole',
+        'shorts', 'sweatpants', 'jogger', 'tracksuit', 'sportswear',
+        'athletic wear', 'activewear', 'swimsuit', 'bikini', 'swimwear',
+        'bathing suit', 'cover up', 'sarong', 'scarf', 'shawl',
+        'hat', 'cap', 'beanie', 'headband', 'belt', 'suspender',
+        'tie', 'bow tie', 'glove', 'mitten', 'apron',
+        'clothing', 'outfit', 'costume', 'uniform', 't-shirt', 'tee',
+        'women dress', 'men shirt', 'plus size', 'maternity',
+    ],
+    'Garden': [
+        'garden', 'planter', 'flower pot', 'plant', 'seed', 'soil',
+        'fertilizer', 'watering can', 'hose', 'sprinkler', 'lawn',
+        'mower', 'trimmer', 'pruner', 'shear', 'trowel', 'rake',
+        'shovel', 'wheelbarrow', 'compost', 'mulch', 'greenhouse',
+        'raised bed', 'trellis', 'garden gnome', 'bird feeder',
+        'bird bath', 'outdoor decor', 'patio', 'yard', 'landscape',
+        'weed', 'herbicide', 'pest control', 'insecticide',
+        'hanging basket', 'succulent', 'cactus', 'bonsai',
+        'artificial flower', 'fake plant', 'silk flower',
+    ],
+    'Kitchen': [
+        'kitchen', 'cooking', 'baking', 'cookware', 'bakeware',
+        'pan', 'pot', 'skillet', 'wok', 'saucepan', 'dutch oven',
+        'casserole', 'roasting', 'griddle', 'grill',
+        'knife', 'cutting board', 'chopping', 'peeler', 'grater',
+        'slicer', 'mandoline', 'can opener', 'bottle opener',
+        'corkscrew', 'whisk', 'spatula', 'ladle', 'tongs',
+        'rolling pin', 'measuring cup', 'measuring spoon',
+        'mixing bowl', 'colander', 'strainer', 'sieve',
+        'food processor', 'blender', 'mixer', 'juicer',
+        'toaster', 'air fryer', 'instant pot', 'slow cooker',
+        'rice cooker', 'coffee maker', 'kettle', 'teapot',
+        'plate', 'bowl', 'mug', 'cup', 'glass', 'tumbler',
+        'utensil', 'silverware', 'flatware', 'chopstick',
+        'food storage', 'container', 'tupperware', 'lunch box',
+        'water bottle', 'thermos', 'flask', 'pitcher',
+        'oven mitt', 'pot holder', 'trivet', 'dish rack',
+        'sponge', 'dish soap', 'kitchen towel',
+        'spice rack', 'seasoning', 'condiment',
+        'cookie cutter', 'cake mold', 'muffin tin', 'pie dish',
+        'cupcake', 'frosting', 'piping', 'fondant',
+        'silicone mold', 'baking mat', 'parchment',
+    ],
+    'Stained Glass': [
+        'stained glass', 'suncatcher', 'sun catcher',
+        'glass panel', 'window hanging', 'glass art',
+        'tiffany', 'leaded glass', 'glass paint',
+        'glass cutter', 'copper foil', 'soldering',
+        'fusing glass', 'dichroic', 'glass mosaic',
+    ],
+    'Hearing Aids': [
+        'hearing aid', 'hearing amplifier', 'ear amplifier',
+        'sound amplifier', 'hearing device', 'hearing assist',
+        'ear piece', 'hearing enhancement', 'audiphone',
+    ],
+    'Makeup': [
+        'makeup', 'cosmetic', 'lipstick', 'lip gloss', 'lip liner',
+        'foundation', 'concealer', 'primer', 'setting spray',
+        'blush', 'bronzer', 'highlighter', 'contour',
+        'eyeshadow', 'eye shadow', 'eyeliner', 'mascara',
+        'eyebrow', 'brow pencil', 'brow gel',
+        'nail polish', 'nail art', 'manicure', 'pedicure',
+        'false eyelash', 'fake lash', 'lash extension',
+        'beauty blender', 'makeup brush', 'brush set',
+        'makeup bag', 'cosmetic bag', 'vanity', 'mirror',
+        'face mask', 'sheet mask', 'peel', 'serum',
+        'moisturizer', 'cleanser', 'toner', 'exfoliant',
+        'skincare', 'skin care', 'face cream', 'eye cream',
+        'sunscreen', 'spf', 'anti-aging', 'retinol',
+        'perfume', 'fragrance', 'cologne', 'body spray',
+    ],
+    'Dog Stuff': [
+        'dog', 'puppy', 'canine', 'pet collar', 'pet leash',
+        'pet bed', 'pet toy', 'pet treat', 'pet food',
+        'pet bowl', 'pet feeder', 'pet water', 'pet carrier',
+        'pet crate', 'pet gate', 'pet door', 'pet clothes',
+        'pet costume', 'pet harness', 'pet tag', 'pet grooming',
+        'pet shampoo', 'pet brush', 'pet nail', 'pet paw',
+        'chew toy', 'squeaky toy', 'fetch', 'frisbee',
+        'dog house', 'kennel', 'dog bed', 'dog crate',
+        'dog food', 'dog treat', 'dog bone', 'dog collar',
+        'dog leash', 'dog harness', 'dog sweater', 'dog coat',
+        'dog bowl', 'dog feeder', 'dog toy', 'dog brush',
+    ],
+    'Jewelry': [
+        'necklace', 'bracelet', 'ring', 'earring', 'pendant',
+        'chain', 'anklet', 'brooch', 'pin', 'charm',
+        'jewelry', 'jewellery', 'gemstone', 'crystal',
+        'diamond', 'gold plated', 'silver plated', 'sterling',
+        'stainless steel', 'titanium', 'cubic zirconia',
+        'pearl', 'bead', 'choker', 'locket', 'cuff',
+        'bangles', 'hoop earring', 'stud earring',
+    ],
+    'Electronics': [
+        'bluetooth', 'wireless', 'usb', 'charger', 'cable',
+        'headphone', 'earphone', 'earbud', 'speaker',
+        'phone case', 'screen protector', 'phone holder',
+        'tablet', 'laptop', 'computer', 'keyboard', 'mouse',
+        'monitor', 'webcam', 'microphone', 'camera',
+        'led light', 'led strip', 'smart light', 'smart plug',
+        'power bank', 'battery', 'adapter', 'converter',
+        'hdmi', 'ethernet', 'wifi', 'router',
+        'drone', 'rc car', 'remote control',
+        'game', 'gaming', 'controller', 'joystick',
+        'vr', 'virtual reality', 'smart watch', 'fitness tracker',
+    ],
+    'Home Decor': [
+        'wall art', 'wall decor', 'canvas', 'painting', 'poster',
+        'picture frame', 'photo frame', 'mirror',
+        'curtain', 'drape', 'blinds', 'valance',
+        'throw pillow', 'cushion', 'pillow cover', 'pillow case',
+        'blanket', 'throw', 'quilt', 'bedspread', 'comforter',
+        'rug', 'carpet', 'mat', 'doormat', 'floor',
+        'candle', 'candle holder', 'incense', 'diffuser',
+        'vase', 'figurine', 'statue', 'sculpture',
+        'clock', 'wall clock', 'alarm clock',
+        'shelf', 'bookshelf', 'storage', 'organizer',
+        'lamp', 'table lamp', 'floor lamp', 'night light',
+        'chandelier', 'pendant light', 'fairy light', 'string light',
+        'tapestry', 'macrame', 'wind chime', 'dreamcatcher',
+        'decoration', 'ornament', 'seasonal', 'holiday',
+        'christmas', 'halloween', 'easter', 'valentine',
+    ],
+    'Toys': [
+        'toy', 'puzzle', 'lego', 'building block', 'playset',
+        'doll', 'action figure', 'stuffed animal', 'plush',
+        'board game', 'card game', 'dice', 'fidget',
+        'slime', 'play dough', 'craft kit', 'coloring',
+        'sticker', 'balloon', 'party supplies',
+        'kids', 'children', 'baby toy', 'toddler',
+        'educational toy', 'learning', 'stem',
+    ],
+    'Tools': [
+        'tool', 'drill', 'screwdriver', 'wrench', 'plier',
+        'hammer', 'saw', 'level', 'tape measure',
+        'socket', 'ratchet', 'hex key', 'allen key',
+        'clamp', 'vise', 'sandpaper', 'putty',
+        'paint brush', 'roller', 'caulk', 'adhesive',
+        'glue gun', 'heat gun', 'soldering iron',
+        'multimeter', 'voltage', 'wire stripper',
+        'toolbox', 'tool bag', 'tool set',
+    ],
+    'Bathroom': [
+        'bathroom', 'shower', 'bath', 'towel', 'washcloth',
+        'soap dispenser', 'toothbrush', 'toothpaste',
+        'toilet', 'bidet', 'plunger', 'brush holder',
+        'shower curtain', 'bath mat', 'bath rug',
+        'shampoo', 'conditioner', 'body wash', 'loofah',
+        'razor', 'shaving', 'hair dryer', 'hair straightener',
+        'hair curler', 'hair clip', 'hair tie', 'comb',
+    ],
+    'Car Accessories': [
+        'car', 'vehicle', 'auto', 'automotive',
+        'car seat', 'car cover', 'steering wheel',
+        'car charger', 'car mount', 'phone mount',
+        'dash cam', 'dashcam', 'gps', 'car organizer',
+        'trunk', 'windshield', 'wiper', 'car wash',
+        'air freshener', 'car perfume', 'car decal',
+        'license plate', 'car mat', 'car floor',
+    ],
+    'Arts & Crafts': [
+        'craft', 'diy', 'handmade', 'crochet', 'knitting',
+        'yarn', 'needle', 'thread', 'sewing', 'fabric',
+        'embroidery', 'cross stitch', 'quilt',
+        'paint', 'acrylic', 'watercolor', 'oil paint',
+        'canvas', 'easel', 'palette', 'paintbrush',
+        'sketch', 'drawing', 'pencil', 'charcoal', 'pastel',
+        'clay', 'pottery', 'ceramic', 'resin', 'epoxy',
+        'scrapbook', 'stamp', 'washi tape', 'stencil',
+        'bead', 'jewelry making', 'wire wrapping',
+        'diamond painting', 'paint by number',
+    ],
+}
+
+
+def categorize_item_title(title, categories):
+    """
+    Match an item title to a category using keyword rules.
+
+    Args:
+        title: The item title string
+        categories: List of category dicts from the database [{'id': 1, 'name': 'Clothes', ...}]
+
+    Returns:
+        category_id if matched, None if no match (stays in current category)
+    """
+    if not title:
+        return None
+
+    title_lower = title.lower()
+
+    # Build a lookup from category name (lowercased) -> category id
+    cat_lookup = {}
+    for cat in categories:
+        cat_lookup[cat['name'].lower()] = cat['id']
+
+    # Check each rule
+    for cat_name, keywords in CATEGORY_RULES.items():
+        cat_name_lower = cat_name.lower()
+        if cat_name_lower not in cat_lookup:
+            continue  # Skip rules for categories that don't exist yet
+
+        for keyword in keywords:
+            if keyword in title_lower:
+                return cat_lookup[cat_name_lower]
+
+    return None
+
+
+@items_bp.route('/auto-categorize', methods=['POST'])
+def auto_categorize():
+    """
+    Auto-categorize items based on title keywords.
+    Optionally creates missing categories if enough items would go there.
+    """
+    data = request.get_json() or {}
+    dry_run = data.get('dry_run', False)
+    create_categories = data.get('create_categories', True)
+    only_unsorted = data.get('only_unsorted', False)
+
+    categories = Category.get_all()
+    all_items = Item.get_all()
+
+    # Build lookup of category names
+    cat_names = {cat['name'].lower() for cat in categories}
+
+    # Get the "Unsorted" category ID
+    unsorted_id = None
+    for cat in categories:
+        if cat['name'] == 'Unsorted' or cat.get('is_default'):
+            unsorted_id = cat['id']
+            break
+
+    # First pass: count items per proposed category (for categories that don't exist yet)
+    proposed_counts = {}
+    for item in all_items:
+        title_lower = (item.get('title') or '').lower()
+        for cat_name, keywords in CATEGORY_RULES.items():
+            if cat_name.lower() in cat_names:
+                continue  # Already exists
+            for keyword in keywords:
+                if keyword in title_lower:
+                    proposed_counts[cat_name] = proposed_counts.get(cat_name, 0) + 1
+                    break
+
+    # Create categories that have 3+ items
+    created_categories = []
+    if create_categories and not dry_run:
+        for cat_name, count in proposed_counts.items():
+            if count >= 3:
+                new_cat = Category.create(cat_name)
+                created_categories.append({'name': cat_name, 'id': new_cat['id'], 'item_count': count})
+        # Reload categories after creating new ones
+        if created_categories:
+            categories = Category.get_all()
+
+    # Second pass: categorize items
+    moves = []
+    for item in all_items:
+        # Skip items not in Unsorted if only_unsorted is set
+        if only_unsorted and unsorted_id and item.get('category_id') != unsorted_id:
+            continue
+
+        new_cat_id = categorize_item_title(item.get('title', ''), categories)
+
+        if new_cat_id and new_cat_id != item.get('category_id'):
+            # Find category name for reporting
+            cat_name = next((c['name'] for c in categories if c['id'] == new_cat_id), 'Unknown')
+            moves.append({
+                'item_id': item['id'],
+                'title': item.get('title', ''),
+                'from_category_id': item.get('category_id'),
+                'to_category_id': new_cat_id,
+                'to_category_name': cat_name,
+            })
+
+    # Apply moves if not dry run
+    if not dry_run:
+        for move in moves:
+            Item.update(move['item_id'], category_id=move['to_category_id'])
+
+    return jsonify({
+        'success': True,
+        'dry_run': dry_run,
+        'moved': len(moves),
+        'created_categories': created_categories,
+        'proposed_categories': [
+            {'name': name, 'count': count}
+            for name, count in proposed_counts.items()
+            if count >= 3
+        ] if dry_run else [],
+        'moves': moves[:100],  # Limit response size
+        'total_items': len(all_items),
     })
