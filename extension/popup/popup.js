@@ -375,7 +375,8 @@ function pickBestPrice(obj) {
   const ps = pi.price_schema || pi.priceSchema || {};
   // Try sale/discount price fields first (the actual price to pay)
   const candidates = [
-    pi.price, pi.sale_price, pi.salePrice,
+    pi.price, pi.price_str, pi.priceStr, pi.price_text, pi.split_price_text,
+    pi.sale_price, pi.salePrice,
     pi.promo_price, pi.discount_price,
     obj.sale_price, obj.salePrice, obj.salePriceCent,
     pi.sale_price, pi.salePrice, ps.sale_price, ps.salePrice,
@@ -396,20 +397,34 @@ function pickBestPrice(obj) {
     obj.original_price, obj.originalPrice,
   ];
 
+  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
+  // and Temu's split arrays like ["$","4",".","9","9"]
+  function parsePrice(v) {
+    if (v == null) return NaN;
+    if (typeof v === 'number') return v;
+    if (Array.isArray(v)) {
+      const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
+      if (!joined) return NaN;
+      return parseFloat(joined.replace(/[^0-9.]/g, ''));
+    }
+    if (typeof v === 'string') return parseFloat(v.replace(/[^0-9.]/g, ''));
+    return NaN;
+  }
+
   let best = null;
   for (const v of candidates) {
-    const n = parseFloat(v);
+    const n = parsePrice(v);
     if (!isNaN(n) && n > 0) { best = n; break; }
   }
   let original = null;
   for (const v of originalCandidates) {
-    const n = parseFloat(v);
+    const n = parsePrice(v);
     if (!isNaN(n) && n > 0) { original = n; break; }
   }
   // Fall back: if no explicit original, use highest from all candidates
   if (original === null) {
     for (const v of [...candidates, ...originalCandidates]) {
-      const n = parseFloat(v);
+      const n = parsePrice(v);
       if (!isNaN(n) && n > 0 && (original === null || n > original)) original = n;
     }
   }
