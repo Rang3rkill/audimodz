@@ -422,18 +422,34 @@ const Admin = {
 
         let totalRefreshed = 0, totalFailed = 0, totalProcessed = 0;
         let remaining = totalWithUrl, batch = 0;
-        const BATCH_SIZE = 50;
+        const BATCH_SIZE = 20;
 
         try {
             while (remaining > 0) {
                 batch++;
                 btn.innerHTML = `<span>&#8987;</span> Batch ${batch} (${totalProcessed}/${totalWithUrl})...`;
 
-                const result = await this.api('/api/items/refresh-pictures', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ limit: BATCH_SIZE, offset: totalProcessed })
-                });
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+                let result;
+                try {
+                    const response = await fetch('/api/items/refresh-pictures', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ limit: BATCH_SIZE, offset: totalProcessed }),
+                        signal: controller.signal,
+                    });
+                    result = await response.json();
+                } catch (e) {
+                    clearTimeout(timeoutId);
+                    if (e.name === 'AbortError') {
+                        this.showToast(`Batch ${batch} timed out - Temu may be rate-limiting`, 'warning');
+                        break;
+                    }
+                    throw e;
+                }
+                clearTimeout(timeoutId);
 
                 totalRefreshed += result.refreshed || 0;
                 totalFailed += result.failed || 0;
@@ -503,18 +519,34 @@ const Admin = {
 
         let totalChecked = 0, totalUpdated = 0, totalDrops = 0, totalIncreases = 0, totalFailed = 0;
         let batch = 0, remaining = totalWithUrl;
-        const BATCH_SIZE = 50;
+        const BATCH_SIZE = 20;
 
         try {
             while (remaining > 0) {
                 batch++;
                 btn.innerHTML = `<span>&#8987;</span> Batch ${batch} (${totalChecked}/${totalWithUrl})...`;
 
-                const result = await this.api('/api/items/price-check', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ limit: BATCH_SIZE })
-                });
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 120000);
+
+                let result;
+                try {
+                    const response = await fetch('/api/items/price-check', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ limit: BATCH_SIZE }),
+                        signal: controller.signal,
+                    });
+                    result = await response.json();
+                } catch (e) {
+                    clearTimeout(timeoutId);
+                    if (e.name === 'AbortError') {
+                        this.showToast(`Batch ${batch} timed out - Temu may be rate-limiting`, 'warning');
+                        break;
+                    }
+                    throw e;
+                }
+                clearTimeout(timeoutId);
 
                 totalChecked += result.checked || 0;
                 totalUpdated += result.updated || 0;

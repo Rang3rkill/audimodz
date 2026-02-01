@@ -465,9 +465,14 @@ def import_items():
                         current_price=new_price,
                         price_updated_at=datetime.now().isoformat()
                     )
+                    # Update image if extension has a better one
+                    ext_img = item_data.get('image_url')
+                    if ext_img and isinstance(ext_img, str) and ext_img.startswith('http'):
+                        if not existing.get('image_url') or (ext_img != existing.get('image_url') and not has_valid_image(existing)):
+                            price_update['image_url'] = ext_img
                     # Backfill thumb_url into product_url if missing
                     ex_url = existing.get('product_url', '')
-                    ex_img = item_data.get('image_url') or existing.get('image_url')
+                    ex_img = ext_img or existing.get('image_url')
                     if ex_img and 'thumb_url=' not in (ex_url or ''):
                         price_update['product_url'] = ensure_thumb_url(ex_url, ex_img)
                     Item.update(existing['id'], **price_update)
@@ -486,10 +491,14 @@ def import_items():
                     elif old_price and new_price > old_price:
                         price_increases += 1
                 else:
-                    # No price change - but update image if missing, set original_price if unset
+                    # No price change - but update image if missing/bad, set original_price if unset
                     reimport_updates = {}
-                    if not existing.get('image_url') and item_data.get('image_url'):
-                        reimport_updates['image_url'] = item_data.get('image_url')
+                    ext_image = item_data.get('image_url')
+                    if ext_image and isinstance(ext_image, str) and ext_image.startswith('http'):
+                        cur_image = existing.get('image_url', '')
+                        # Update if missing OR if extension image differs (extension images are more reliable)
+                        if not cur_image or (ext_image != cur_image and not has_valid_image(existing)):
+                            reimport_updates['image_url'] = ext_image
                     if existing.get('original_price') is None and new_price is not None:
                         reimport_updates['original_price'] = new_price
                     # Backfill thumb_url into product_url if missing
@@ -640,8 +649,9 @@ def scrape_temu_product(url):
                             title = goods.get('goods_name') or goods.get('goodsName') or goods.get('title', '')
                             if title and len(title) > 5:
                                 data['title'] = title
-                            # Image
-                            img = goods.get('thumb_url') or goods.get('thumbUrl') or goods.get('image') or goods.get('hdThumbUrl', '')
+                            # Image - filter to strings only (image field can be an object)
+                            img_candidates = [goods.get('thumb_url'), goods.get('thumbUrl'), goods.get('hdThumbUrl')]
+                            img = next((u for u in img_candidates if isinstance(u, str) and u.startswith('http')), '')
                             if img and is_valid_product_image(img):
                                 data['image_url'] = img.replace('\\/', '/')
                             # Price - prefer sale/discount price over original price
@@ -1015,6 +1025,12 @@ def refresh_pictures():
         # via JavaScript - the static HTML only contains generic sale/promo images.
         # NEVER overwrite an existing image with a server-scraped one.
         if item.get('image_url'):
+            skipped += 1
+            continue
+
+        # Cap server-side scrapes per batch to avoid long-running requests
+        # (each scrape can take 15s+ with retries if Temu rate-limits)
+        if (failed + refreshed) >= 5:
             skipped += 1
             continue
 

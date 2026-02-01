@@ -370,13 +370,21 @@ function scrollToLoadAllItems() {
 // Temu stores `price` = original full price, `salePrice` = discounted price.
 // We want the sale price (what the customer actually pays).
 function pickBestPrice(obj) {
+  // Flatten nested price containers (Temu cart API nests prices in price_info)
+  const pi = obj.price_info || obj.priceInfo || {};
+  const ps = pi.price_schema || pi.priceSchema || {};
   // Try sale/discount price fields first (the actual price to pay)
   const candidates = [
     obj.sale_price, obj.salePrice, obj.salePriceCent,
+    pi.sale_price, pi.salePrice, ps.sale_price, ps.salePrice,
     obj.promo_price, obj.promoPrice,
+    pi.promo_price, pi.promoPrice, ps.promo_price, ps.promoPrice,
     obj.discount_price, obj.discountPrice,
+    pi.discount_price, pi.discountPrice, ps.discount_price, ps.discountPrice,
     obj.current_price, obj.currentPrice,
+    pi.current_price, pi.currentPrice,
     obj.price, obj.priceCent,
+    pi.price, pi.priceCent, ps.price, ps.priceCent,
   ];
   let best = null;
   let original = null;
@@ -466,7 +474,10 @@ async function scrapeTemuAllTabs() {
           const productId = String(item.goods_id || item.goodsId || item.product_id || item.subjectId || '');
           if (!productId || allItems.has(productId)) continue;
 
-          const image = item.thumb_url || item.thumbUrl || item.image || item.goods_img || item.hdThumbUrl || null;
+          // Prefer long_thumb_url (product photo) over thumb_url (may be sale banner).
+          // item.image is an object on the cart API, so filter to strings only.
+          const imageCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          const image = imageCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           const { salePrice, originalPrice } = pickBestPrice(item);
 
           let productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
