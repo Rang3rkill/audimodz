@@ -136,12 +136,7 @@ const App = {
             statTotalValue: document.getElementById('statTotalValue'),
             statReadyToBuy: document.getElementById('statReadyToBuy'),
             statReadyValue: document.getElementById('statReadyValue'),
-            statRecentlyAdded: document.getElementById('statRecentlyAdded'),
-            statFavorites: document.getElementById('statFavorites'),
-            storeStats: document.getElementById('storeStats'),
-            // Settings panel action buttons
-            manageCategoriesBtn2: document.getElementById('manageCategoriesBtn2'),
-            manageListsBtn2: document.getElementById('manageListsBtn2'),
+            // (Admin-only stats and actions moved to /admin page)
             // Search
             searchInput: document.getElementById('searchInput'),
             clearSearch: document.getElementById('clearSearch'),
@@ -156,18 +151,7 @@ const App = {
             budgetSpent: document.getElementById('budgetSpent'),
             budgetTotal: document.getElementById('budgetTotal'),
             budgetRemaining: document.getElementById('budgetRemaining'),
-            // Additional stats
-            statOldestItem: document.getElementById('statOldestItem'),
-            statPriceDrops: document.getElementById('statPriceDrops'),
-            // Missing data
-            missingCount: document.getElementById('missingCount'),
-            missingDataList: document.getElementById('missingDataList'),
-            refreshMissingData: document.getElementById('refreshMissingData'),
-            refreshPictures: document.getElementById('refreshPictures'),
-            cleanBadImages: document.getElementById('cleanBadImages'),
-            // Duplicates
-            duplicateCount: document.getElementById('duplicateCount'),
-            duplicatesList: document.getElementById('duplicatesList'),
+            // (Missing data, duplicates, bulk tools moved to /admin page)
             // Date/Time/Balance
             dateDisplay: document.getElementById('dateDisplay'),
             timeDisplay: document.getElementById('timeDisplay'),
@@ -196,9 +180,7 @@ const App = {
             batchMove: document.getElementById('batchMove'),
             batchDelete: document.getElementById('batchDelete'),
             exitSelectMode: document.getElementById('exitSelectMode'),
-            // Export and price check
-            exportDataBtn: document.getElementById('exportDataBtn'),
-            priceCheckBtn: document.getElementById('priceCheckBtn'),
+            // (Export and price check moved to /admin page)
         };
     },
 
@@ -255,25 +237,7 @@ const App = {
             this.addItem();
         });
 
-        // Refresh prices
-        this.elements.refreshPrices?.addEventListener('click', () => {
-            this.bulkRefreshPrices();
-        });
-
-        // Refresh missing data (images/prices)
-        this.elements.refreshMissingData?.addEventListener('click', () => {
-            this.refreshAllMissingData();
-        });
-
-        // Bulk refresh pictures
-        this.elements.refreshPictures?.addEventListener('click', () => {
-            this.bulkRefreshPictures();
-        });
-
-        // Clean bad images
-        this.elements.cleanBadImages?.addEventListener('click', () => {
-            this.cleanBadImages();
-        });
+        // (Bulk refresh/clean tools moved to /admin page)
 
         // Filter chips
         document.querySelectorAll('.filter-chip').forEach(chip => {
@@ -302,11 +266,7 @@ const App = {
         this.elements.batchDelete?.addEventListener('click', () => this.batchDelete());
         this.elements.batchMove?.addEventListener('click', () => this.showBatchMoveModal());
 
-        // Export button
-        this.elements.exportDataBtn?.addEventListener('click', () => this.exportData());
-
-        // Price check button
-        this.elements.priceCheckBtn?.addEventListener('click', () => this.checkPrices());
+        // (Export and price check moved to /admin page)
 
         // Management modals
         this.elements.manageCategoriesBtn?.addEventListener('click', () => {
@@ -317,14 +277,7 @@ const App = {
             this.showManageListsModal();
         });
 
-        // Settings panel buttons (duplicates in panel)
-        this.elements.manageCategoriesBtn2?.addEventListener('click', () => {
-            this.showManageCategoriesModal();
-        });
-
-        this.elements.manageListsBtn2?.addEventListener('click', () => {
-            this.showManageListsModal();
-        });
+        // (Settings panel admin buttons moved to /admin page)
 
         // Settings panel toggle
         this.elements.settingsToggle?.addEventListener('click', () => {
@@ -515,7 +468,6 @@ const App = {
         this.renderStats();
         this.renderBudget();
         this.renderBalance();
-        this.renderMissingData();
         this.applyViewMode();
         // Set break reminder checkbox
         if (this.elements.breakRemindersEnabled) {
@@ -523,94 +475,7 @@ const App = {
         }
     },
 
-    // Render items missing images or prices in settings panel
-    renderMissingData() {
-        if (!this.elements.missingDataList) return;
-
-        // Find items without images OR without prices
-        const missingItems = this.items.filter(item => !item.image_url || item.current_price === null);
-
-        // Update count badge
-        if (this.elements.missingCount) {
-            this.elements.missingCount.textContent = missingItems.length > 0 ? `(${missingItems.length})` : '';
-            this.elements.missingCount.classList.toggle('has-missing', missingItems.length > 0);
-        }
-
-        if (missingItems.length === 0) {
-            this.elements.missingDataList.innerHTML = `
-                <p class="no-missing">All items have complete data!</p>
-            `;
-            return;
-        }
-
-        // Show first 20 items with missing data
-        const itemsToShow = missingItems.slice(0, 20);
-        let html = '';
-
-        for (const item of itemsToShow) {
-            const storeBadge = item.store.charAt(0).toUpperCase() + item.store.slice(1);
-            const missingWhat = [];
-            if (!item.image_url) missingWhat.push('image');
-            if (item.current_price === null) missingWhat.push('price');
-
-            html += `
-                <div class="missing-item" data-id="${item.id}">
-                    <div class="missing-item-placeholder">?</div>
-                    <div class="missing-item-info">
-                        <div class="missing-item-title">${this.escapeHtml(item.title)}</div>
-                        <div class="missing-item-meta">
-                            <span class="missing-item-store">${storeBadge}</span>
-                            <span class="missing-what">Missing: ${missingWhat.join(', ')}</span>
-                        </div>
-                    </div>
-                    <button class="missing-item-refresh" data-id="${item.id}" title="Fetch data from product page">&#8635;</button>
-                    <a href="${item.product_url}" target="_blank" class="missing-item-link" title="View on ${storeBadge}">
-                        View
-                    </a>
-                </div>
-            `;
-        }
-
-        if (missingItems.length > 20) {
-            html += `<p style="text-align: center; color: var(--text-light); font-size: 13px;">
-                ...and ${missingItems.length - 20} more items
-            </p>`;
-        }
-
-        this.elements.missingDataList.innerHTML = html;
-
-        // Bind refresh buttons
-        this.elements.missingDataList.querySelectorAll('.missing-item-refresh').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.preventDefault();
-                const itemId = parseInt(btn.dataset.id);
-                btn.innerHTML = '&#8987;';
-                btn.disabled = true;
-
-                try {
-                    const result = await this.api(`/api/items/${itemId}/refresh`, { method: 'POST' });
-                    if (result.success && result.updated_fields.length > 0) {
-                        // Update local item
-                        const item = this.items.find(i => i.id === itemId);
-                        if (item && result.item) {
-                            Object.assign(item, result.item);
-                        }
-                        this.renderItems();
-                        this.renderMissingData();
-                        this.showToast(`Updated: ${result.updated_fields.join(', ')}`, 'success');
-                    } else {
-                        this.showToast('No data found', 'warning');
-                        btn.innerHTML = '&#8635;';
-                        btn.disabled = false;
-                    }
-                } catch (error) {
-                    this.showToast('Refresh failed', 'error');
-                    btn.innerHTML = '&#8635;';
-                    btn.disabled = false;
-                }
-            });
-        });
-    },
+    // (renderMissingData moved to /admin page)
 
     // Render stats in settings panel
     renderStats() {
@@ -629,41 +494,7 @@ const App = {
         if (this.elements.statReadyValue) {
             this.elements.statReadyValue.textContent = '$' + (this.stats.ready_to_buy_value || 0).toFixed(2);
         }
-        if (this.elements.statRecentlyAdded) {
-            this.elements.statRecentlyAdded.textContent = (this.stats.recently_added || 0) + ' items';
-        }
-        if (this.elements.statFavorites) {
-            this.elements.statFavorites.textContent = (this.stats.favorites || 0) + ' items';
-        }
-        if (this.elements.statOldestItem) {
-            this.elements.statOldestItem.textContent = this.stats.oldest_item_age || '-';
-        }
-        if (this.elements.statPriceDrops) {
-            this.elements.statPriceDrops.textContent = (this.stats.price_drops || 0) + ' items';
-        }
-
-        // Render store stats
-        if (this.elements.storeStats && this.stats.by_store) {
-            const storeConfig = {
-                temu: { name: 'Temu', icon: 'T' },
-                amazon: { name: 'Amazon', icon: 'A' },
-            };
-
-            let html = '';
-            for (const [store, data] of Object.entries(this.stats.by_store)) {
-                const config = storeConfig[store] || { name: store, icon: store[0].toUpperCase() };
-                html += `
-                    <div class="store-stat-row">
-                        <span class="store-stat-icon ${store}">${config.icon}</span>
-                        <div class="store-stat-info">
-                            <div class="store-stat-name">${config.name}</div>
-                            <div class="store-stat-details">${data.count} items - $${data.value.toFixed(2)}</div>
-                        </div>
-                    </div>
-                `;
-            }
-            this.elements.storeStats.innerHTML = html;
-        }
+        // (Activity stats and store breakdown moved to /admin page)
     },
 
     // Settings panel
@@ -671,7 +502,6 @@ const App = {
         this.elements.settingsPanel?.classList.toggle('hidden');
         if (!this.elements.settingsPanel?.classList.contains('hidden')) {
             this.loadStats();
-            this.loadDuplicates();
         }
     },
 
@@ -885,116 +715,7 @@ const App = {
         this.lastBreakReminder = Date.now() - this.breakReminderInterval + (10 * 60 * 1000);
     },
 
-    // Duplicates detection
-    async loadDuplicates() {
-        try {
-            const duplicates = await this.api('/api/items/duplicates');
-            this.renderDuplicates(duplicates);
-        } catch (error) {
-            console.error('Error loading duplicates:', error);
-        }
-    },
-
-    renderDuplicates(duplicates) {
-        if (!this.elements.duplicatesList) return;
-
-        // Update count badge
-        if (this.elements.duplicateCount) {
-            this.elements.duplicateCount.textContent = duplicates.length > 0 ? `(${duplicates.length})` : '';
-            this.elements.duplicateCount.classList.toggle('has-duplicates', duplicates.length > 0);
-        }
-
-        if (duplicates.length === 0) {
-            this.elements.duplicatesList.innerHTML = `
-                <p class="no-duplicates">No potential duplicates found</p>
-            `;
-            return;
-        }
-
-        let html = '';
-        for (const dup of duplicates) {
-            const item1 = dup.item1;
-            const item2 = dup.item2;
-            const img1 = item1.image_url ? `<img src="${item1.image_url}" alt="">` : '<div class="no-img">?</div>';
-            const img2 = item2.image_url ? `<img src="${item2.image_url}" alt="">` : '<div class="no-img">?</div>';
-            const storeMatch = dup.same_store ? '<span class="same-store">Same store</span>' : '<span class="diff-store">Different stores</span>';
-
-            html += `
-                <div class="duplicate-pair" data-id1="${item1.id}" data-id2="${item2.id}">
-                    <div class="duplicate-header">
-                        <span class="similarity-badge">${dup.similarity}% match</span>
-                        ${storeMatch}
-                    </div>
-                    <div class="duplicate-items">
-                        <div class="duplicate-item">
-                            ${img1}
-                            <div class="duplicate-item-info">
-                                <div class="duplicate-title">${this.escapeHtml(item1.title)}</div>
-                                <div class="duplicate-meta">
-                                    <span class="store-tag ${item1.store}">${item1.store}</span>
-                                    ${item1.current_price ? '$' + item1.current_price.toFixed(2) : ''}
-                                </div>
-                            </div>
-                        </div>
-                        <div class="duplicate-vs">VS</div>
-                        <div class="duplicate-item">
-                            ${img2}
-                            <div class="duplicate-item-info">
-                                <div class="duplicate-title">${this.escapeHtml(item2.title)}</div>
-                                <div class="duplicate-meta">
-                                    <span class="store-tag ${item2.store}">${item2.store}</span>
-                                    ${item2.current_price ? '$' + item2.current_price.toFixed(2) : ''}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="duplicate-actions">
-                        <button class="btn btn-small btn-danger delete-dup" data-id="${item2.id}" title="Remove newer item">Delete #2</button>
-                        <button class="btn btn-small dismiss-dup" data-id1="${item1.id}" data-id2="${item2.id}" title="Not a duplicate">Dismiss</button>
-                    </div>
-                </div>
-            `;
-        }
-
-        this.elements.duplicatesList.innerHTML = html;
-        this.bindDuplicateEvents();
-    },
-
-    bindDuplicateEvents() {
-        // Delete duplicate button
-        this.elements.duplicatesList.querySelectorAll('.delete-dup').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const itemId = parseInt(btn.dataset.id);
-                if (confirm('Delete this item?')) {
-                    await this.api(`/api/items/${itemId}`, { method: 'DELETE' });
-                    this.showToast('Item deleted');
-                    await this.loadItems();
-                    await this.loadDuplicates();
-                    await this.loadStats();
-                }
-            });
-        });
-
-        // Dismiss duplicate (just removes from view for this session)
-        this.elements.duplicatesList.querySelectorAll('.dismiss-dup').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const pair = btn.closest('.duplicate-pair');
-                pair.style.animation = 'slideOut 0.3s ease forwards';
-                setTimeout(() => {
-                    pair.remove();
-                    // Update count
-                    const remaining = this.elements.duplicatesList.querySelectorAll('.duplicate-pair').length;
-                    if (this.elements.duplicateCount) {
-                        this.elements.duplicateCount.textContent = remaining > 0 ? `(${remaining})` : '';
-                        this.elements.duplicateCount.classList.toggle('has-duplicates', remaining > 0);
-                    }
-                    if (remaining === 0) {
-                        this.elements.duplicatesList.innerHTML = '<p class="no-duplicates">No potential duplicates found</p>';
-                    }
-                }, 300);
-            });
-        });
-    },
+    // (Duplicates detection moved to /admin page)
 
     // Toast notification
     showToast(message, type = 'success') {
@@ -1493,239 +1214,7 @@ const App = {
         }
     },
 
-    // Refresh all items missing data (bulk refresh)
-    async refreshAllMissingData() {
-        const btn = this.elements.refreshMissingData;
-        if (!btn) return;
-
-        // Check server-side for missing data (includes bad image detection)
-        let missingCount = 0;
-        try {
-            const stats = await this.api('/api/items/stats');
-            missingCount = stats.missing_any || 0;
-        } catch(e) {
-            // Fall back to local check
-            missingCount = this.items.filter(i => !i.image_url || i.current_price === null).length;
-        }
-
-        if (missingCount === 0) {
-            this.showToast('All items have complete data!', 'success');
-            return;
-        }
-
-        if (!confirm(`${missingCount} items have missing or bad data.\n\nThis will attempt to refresh prices and fill in missing images.\n\nContinue?`)) {
-            return;
-        }
-
-        // Show loading state
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = `<span class="spinner">&#8987;</span> Refreshing...`;
-        btn.disabled = true;
-
-        try {
-            const result = await this.api('/api/items/refresh-missing', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ limit: 50 })
-            });
-
-            // Reload items to show updated data
-            await this.loadItems();
-            this.renderMissingData();
-
-            // Show result
-            if (result.refreshed > 0) {
-                this.showToast(`Updated ${result.refreshed} items, ${result.failed} failed`, 'success');
-            } else {
-                this.showToast('Could not find new data for any items', 'warning');
-            }
-        } catch (error) {
-            console.error('Bulk refresh failed:', error);
-            this.showToast('Failed to refresh items', 'error');
-        } finally {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        }
-    },
-
-    // Bulk refresh pictures for all items
-    async bulkRefreshPictures() {
-        const btn = this.elements.refreshPictures;
-        if (!btn) return;
-
-        const totalWithUrl = this.items.filter(i => i.product_url).length;
-        if (totalWithUrl === 0) {
-            this.showToast('No items with product URLs to refresh', 'warning');
-            return;
-        }
-
-        // Check server-side for bad images count
-        let badImageCount = 0;
-        try {
-            const stats = await this.api('/api/items/stats');
-            badImageCount = stats.missing_image || 0;
-        } catch(e) {}
-
-        const msg = badImageCount > 0
-            ? `Found ${badImageCount} items with missing/bad images out of ${totalWithUrl} total.\n\nThis will process ALL items in batches (items with bad images first).\n\nFor best results, also use "Refresh All Images" in the Chrome extension on your Temu cart page.\n\nContinue?`
-            : `Refresh pictures for ${totalWithUrl} items?\n\nThis will process all items in batches.\n\nContinue?`;
-
-        if (!confirm(msg)) {
-            return;
-        }
-
-        const originalHtml = btn.innerHTML;
-        btn.disabled = true;
-
-        let totalRefreshed = 0;
-        let totalFailed = 0;
-        let totalProcessed = 0;
-        let remaining = totalWithUrl;
-        let batch = 0;
-        const BATCH_SIZE = 50;
-
-        try {
-            while (remaining > 0) {
-                batch++;
-                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch} (${totalProcessed}/${totalWithUrl})...`;
-
-                const result = await this.api('/api/items/refresh-pictures', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ limit: BATCH_SIZE, offset: totalProcessed })
-                });
-
-                totalRefreshed += result.refreshed || 0;
-                totalFailed += result.failed || 0;
-                totalProcessed += result.processed || 0;
-                remaining = (result.total || 0) - totalProcessed;
-
-                if ((result.processed || 0) === 0) break;
-
-                // Brief pause between batches to avoid hammering the server
-                if (remaining > 0) {
-                    await new Promise(r => setTimeout(r, 1000));
-                }
-            }
-
-            await this.loadItems();
-            this.renderItems();
-
-            const badRemaining = this.items.filter(i => !i.image_url).length;
-            if (totalRefreshed > 0) {
-                this.showToast(`Updated ${totalRefreshed} pictures across ${batch} batches (${totalFailed} failed)`, 'success');
-            } else {
-                this.showToast(`All ${totalProcessed} pictures checked - no updates found (${totalFailed} failed). Use extension for best results.`, 'info');
-            }
-        } catch (error) {
-            console.error('Bulk picture refresh failed:', error);
-            this.showToast(`Refreshed ${totalRefreshed} so far. Error on batch ${batch}: ${error.message}`, 'error');
-        } finally {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        }
-    },
-
-    // Clean bad/duplicate images that were set by server-side scraping
-    async cleanBadImages() {
-        const btn = this.elements.cleanBadImages;
-        if (!btn) return;
-
-        if (!confirm('This will:\n\n1. Find images shared by 3+ items (generic placeholders) and clear them\n2. Restore correct images from the Chrome extension where available\n\nAfter cleaning, use the Chrome extension\'s "Refresh All Images" on your Temu cart page to re-fetch correct images.\n\nContinue?')) {
-            return;
-        }
-
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = '<span class="spinner">&#8987;</span> Cleaning...';
-        btn.disabled = true;
-
-        try {
-            const result = await this.api('/api/items/clean-bad-images', {
-                method: 'POST',
-            });
-
-            await this.loadItems();
-            this.renderItems();
-
-            const msg = `Cleaned ${result.cleared} bad images, restored ${result.restored_from_extension} from extension. Found ${result.duplicate_image_urls} duplicate image URLs.`;
-            this.showToast(msg, result.cleared > 0 || result.restored_from_extension > 0 ? 'success' : 'info');
-        } catch (error) {
-            console.error('Clean bad images failed:', error);
-            this.showToast('Failed to clean bad images', 'error');
-        } finally {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        }
-    },
-
-    // Bulk refresh prices for all items
-    async bulkRefreshPrices() {
-        const btn = this.elements.refreshPrices;
-        if (!btn) return;
-
-        const totalWithUrl = this.items.filter(i => i.product_url).length;
-        if (totalWithUrl === 0) {
-            this.showToast('No items with product URLs to check', 'warning');
-            return;
-        }
-
-        if (!confirm(`Check prices for ${totalWithUrl} items?\n\nThis will process items in batches and may take a while.`)) {
-            return;
-        }
-
-        const originalHtml = btn.innerHTML;
-        btn.disabled = true;
-
-        let totalChecked = 0;
-        let totalUpdated = 0;
-        let totalDrops = 0;
-        let totalIncreases = 0;
-        let totalFailed = 0;
-        let batch = 0;
-        const BATCH_SIZE = 50;
-        let remaining = totalWithUrl;
-
-        try {
-            while (remaining > 0) {
-                batch++;
-                btn.innerHTML = `<span class="spinner">&#8987;</span> Batch ${batch} (${totalChecked}/${totalWithUrl})...`;
-
-                const result = await this.api('/api/items/price-check', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ limit: BATCH_SIZE })
-                });
-
-                totalChecked += result.checked || 0;
-                totalUpdated += result.updated || 0;
-                totalDrops += result.price_drops || 0;
-                totalIncreases += result.price_increases || 0;
-                totalFailed += result.failed || 0;
-                remaining = totalWithUrl - totalChecked - totalFailed;
-
-                if ((result.checked || 0) === 0 && (result.failed || 0) === 0) break;
-
-                if (remaining > 0) {
-                    await new Promise(r => setTimeout(r, 1000));
-                }
-            }
-
-            await this.loadItems();
-            this.renderItems();
-
-            if (totalUpdated > 0) {
-                this.showToast(`Checked ${totalChecked} prices: ${totalDrops} drops, ${totalIncreases} increases`, 'success');
-            } else {
-                this.showToast(`Checked ${totalChecked} prices - no changes found`, 'info');
-            }
-        } catch (error) {
-            console.error('Bulk price check failed:', error);
-            this.showToast(`Price check error on batch ${batch}: ${error.message}`, 'error');
-        } finally {
-            btn.innerHTML = originalHtml;
-            btn.disabled = false;
-        }
-    },
+    // (Bulk admin operations moved to /admin page)
 
     // Adjust item quantity
     async adjustQuantity(itemId, delta) {
@@ -2784,79 +2273,7 @@ const App = {
     // EXPORT AND PRICE CHECK
     // ==========================================
 
-    async exportData() {
-        const format = prompt('Export format:\n1. JSON\n2. CSV\n\nEnter 1 or 2:', '1');
-
-        if (!format) return;
-
-        const formatType = format === '2' ? 'csv' : 'json';
-        const url = `/api/items/export?format=${formatType}`;
-
-        if (formatType === 'csv') {
-            // Download CSV directly
-            window.location.href = url;
-            this.showToast('Exporting CSV...', 'success');
-        } else {
-            // Show JSON in new tab or download
-            try {
-                const data = await this.api(url);
-                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                const downloadUrl = URL.createObjectURL(blob);
-
-                const a = document.createElement('a');
-                a.href = downloadUrl;
-                a.download = `wishlist_export_${new Date().toISOString().split('T')[0]}.json`;
-                a.click();
-
-                URL.revokeObjectURL(downloadUrl);
-                this.showToast(`Exported ${data.count} items`, 'success');
-            } catch (error) {
-                this.showToast('Export failed', 'error');
-            }
-        }
-    },
-
-    async checkPrices() {
-        if (!confirm('Check prices for all items?\n\nThis will compare current prices with Temu and update any changes. This may take a while.')) {
-            return;
-        }
-
-        const btn = this.elements.priceCheckBtn;
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = '<span>&#8987;</span> Checking...';
-        }
-
-        try {
-            const result = await this.api('/api/items/price-check', {
-                method: 'POST',
-                body: JSON.stringify({ limit: 30 })
-            });
-
-            let msg = `Checked ${result.checked} items`;
-            if (result.price_drops > 0) {
-                msg += `, ${result.price_drops} price drops!`;
-            }
-            if (result.price_increases > 0) {
-                msg += `, ${result.price_increases} increased`;
-            }
-
-            this.showToast(msg, result.price_drops > 0 ? 'success' : 'info');
-
-            // Reload to show updated prices
-            if (result.updated > 0) {
-                await this.loadItems();
-            }
-
-        } catch (error) {
-            this.showToast('Price check failed', 'error');
-        } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = '<span>&#36;</span> Check Prices';
-            }
-        }
-    },
+    // (Export and price check moved to /admin page)
 
     // Helper: escape HTML
     escapeHtml(str) {

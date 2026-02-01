@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="admin-page">
+    <div class="admin-header">
+        <h2>Admin Console</h2>
+        <a href="/" class="btn btn-secondary btn-small">Back to Wishlist</a>
+    </div>
+
+    <div class="admin-grid">
+        <!-- Dashboard Stats -->
+        <div class="admin-card">
+            <h3>Dashboard</h3>
+            <div class="stats-grid" id="adminStatsGrid">
+                <div class="stat-card">
+                    <div class="stat-value" id="adminStatTotalItems">0</div>
+                    <div class="stat-label">Total Items</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="adminStatTotalValue">$0</div>
+                    <div class="stat-label">Total Value</div>
+                </div>
+                <div class="stat-card highlight">
+                    <div class="stat-value" id="adminStatReadyToBuy">0</div>
+                    <div class="stat-label">Ready to Buy</div>
+                </div>
+                <div class="stat-card highlight">
+                    <div class="stat-value" id="adminStatReadyValue">$0</div>
+                    <div class="stat-label">Cart Value</div>
+                </div>
+            </div>
+            <div class="store-stats" id="adminStoreStats"></div>
+        </div>
+
+        <!-- Activity -->
+        <div class="admin-card">
+            <h3>Activity</h3>
+            <div class="activity-info">
+                <div class="activity-row">
+                    <span>New this week:</span>
+                    <span id="adminStatRecentlyAdded">0 items</span>
+                </div>
+                <div class="activity-row">
+                    <span>Favorites:</span>
+                    <span id="adminStatFavorites">0 items</span>
+                </div>
+                <div class="activity-row">
+                    <span>Oldest item:</span>
+                    <span id="adminStatOldestItem">-</span>
+                </div>
+                <div class="activity-row">
+                    <span>Price drops:</span>
+                    <span id="adminStatPriceDrops">0 items</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Tools -->
+        <div class="admin-card">
+            <h3>Data Tools</h3>
+            <div class="admin-actions">
+                <button id="adminRefreshMissing" class="btn btn-warning btn-block">
+                    <span>&#8635;</span> Refresh Missing Data
+                </button>
+                <button id="adminRefreshPictures" class="btn btn-info btn-block">
+                    <span>&#128247;</span> Bulk Refresh Pictures
+                </button>
+                <button id="adminCleanBadImages" class="btn btn-outline-danger btn-block">
+                    <span>&#128465;</span> Clean Bad Images
+                </button>
+                <button id="adminRefreshPrices" class="btn btn-secondary btn-block">
+                    <span>&#8635;</span> Refresh All Prices
+                </button>
+            </div>
+        </div>
+
+        <!-- Manage -->
+        <div class="admin-card">
+            <h3>Manage</h3>
+            <div class="admin-actions">
+                <button id="adminManageCategories" class="btn btn-secondary btn-block">
+                    <span>&#9776;</span> Manage Categories
+                </button>
+                <button id="adminManageLists" class="btn btn-secondary btn-block">
+                    <span>&#9776;</span> Manage Lists
+                </button>
+                <button id="adminExportData" class="btn btn-secondary btn-block">
+                    <span>&#128190;</span> Export Data
+                </button>
+                <button id="adminPriceCheck" class="btn btn-secondary btn-block">
+                    <span>&#36;</span> Check Prices
+                </button>
+                <button id="adminAutoCategories" class="btn btn-primary btn-block">
+                    <span>&#129302;</span> AI Sort Categories
+                </button>
+            </div>
+        </div>
+
+        <!-- Missing Images -->
+        <div class="admin-card admin-card-wide">
+            <h3>
+                Missing Images
+                <span class="missing-count" id="adminMissingCount"></span>
+            </h3>
+            <p class="missing-info">Items imported without images will show a "?" placeholder.</p>
+            <div id="adminMissingDataList" class="missing-data-list"></div>
+        </div>
+
+        <!-- Potential Duplicates -->
+        <div class="admin-card admin-card-wide">
+            <h3>
+                Potential Duplicates
+                <span class="duplicate-count" id="adminDuplicateCount"></span>
+            </h3>
+            <div id="adminDuplicatesList" class="duplicates-list">
+                <p class="duplicates-loading">Checking for duplicates...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Categories Modal -->
+<div id="manageCategoriesModal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Manage Categories</h2>
+            <button class="close-btn" data-close="manageCategoriesModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="add-form">
+                <input type="text" id="newCategoryName" placeholder="New category name...">
+                <button id="addCategoryBtn" class="btn btn-primary">Add</button>
+            </div>
+            <div class="sortable-list" id="categoriesList"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Lists Modal -->
+<div id="manageListsModal" class="modal hidden">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Manage Lists</h2>
+            <button class="close-btn" data-close="manageListsModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="add-form">
+                <input type="text" id="newListName" placeholder="New list name...">
+                <button id="addListBtn" class="btn btn-primary">Add</button>
+            </div>
+            <div class="sortable-list" id="listsList"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirm Delete Modal -->
+<div id="confirmDeleteModal" class="modal hidden">
+    <div class="modal-content modal-small">
+        <div class="modal-header modal-header-warning">
+            <h2>&#9888; Confirm Delete</h2>
+            <button class="close-btn" data-close="confirmDeleteModal">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p id="confirmDeleteMessage" class="confirm-message"></p>
+            <p class="confirm-warning">This action cannot be undone.</p>
+        </div>
+        <div class="modal-footer">
+            <button id="confirmDeleteCancel" class="btn btn-secondary">Cancel</button>
+            <button id="confirmDeleteConfirm" class="btn btn-danger">Delete</button>
+        </div>
+    </div>
+</div>
+
+<div id="adminStatus" class="admin-status hidden"></div>
+
+<script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% endblock %}

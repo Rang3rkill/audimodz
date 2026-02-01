@@ -55,30 +55,6 @@
             <button id="closeSettings" class="close-btn">&times;</button>
         </div>
         <div class="settings-content">
-            <!-- Dashboard Stats -->
-            <div class="dashboard-section">
-                <h3>Dashboard</h3>
-                <div class="stats-grid" id="statsGrid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="statTotalItems">0</div>
-                        <div class="stat-label">Total Items</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="statTotalValue">$0</div>
-                        <div class="stat-label">Total Value</div>
-                    </div>
-                    <div class="stat-card highlight">
-                        <div class="stat-value" id="statReadyToBuy">0</div>
-                        <div class="stat-label">Ready to Buy</div>
-                    </div>
-                    <div class="stat-card highlight">
-                        <div class="stat-value" id="statReadyValue">$0</div>
-                        <div class="stat-label">Cart Value</div>
-                    </div>
-                </div>
-                <div class="store-stats" id="storeStats"></div>
-            </div>
-
             <!-- Balance Display (for Judi) -->
             <div class="settings-section balance-section">
                 <h3>Judi's Available Balance</h3>
@@ -120,78 +96,26 @@
                 </div>
             </div>
 
-            <!-- Quick Actions -->
+            <!-- Quick Summary -->
             <div class="settings-section">
-                <h3>Quick Actions</h3>
-                <div class="action-buttons">
-                    <button id="refreshMissingData" class="btn btn-warning btn-block">
-                        <span>&#8635;</span> Refresh Missing Data
-                    </button>
-                    <button id="refreshPictures" class="btn btn-info btn-block">
-                        <span>&#128247;</span> Bulk Refresh Pictures
-                    </button>
-                    <button id="cleanBadImages" class="btn btn-outline-danger btn-block">
-                        <span>&#128465;</span> Clean Bad Images
-                    </button>
-                    <button id="refreshPrices" class="btn btn-secondary btn-block">
-                        <span>&#8635;</span> Refresh All Prices
-                    </button>
-                    <button id="manageCategoriesBtn2" class="btn btn-secondary btn-block">
-                        <span>&#9776;</span> Manage Categories
-                    </button>
-                    <button id="manageListsBtn2" class="btn btn-secondary btn-block">
-                        <span>&#9776;</span> Manage Lists
-                    </button>
-                    <button id="exportDataBtn" class="btn btn-secondary btn-block">
-                        <span>&#128190;</span> Export Data
-                    </button>
-                    <button id="priceCheckBtn" class="btn btn-secondary btn-block">
-                        <span>&#36;</span> Check Prices
-                    </button>
-                </div>
-            </div>
-
-            <!-- Recent Activity -->
-            <div class="settings-section">
-                <h3>Activity</h3>
-                <div class="activity-info">
-                    <div class="activity-row">
-                        <span>New this week:</span>
-                        <span id="statRecentlyAdded">0 items</span>
+                <h3>Your Wishlist</h3>
+                <div class="stats-grid" id="statsGrid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalItems">0</div>
+                        <div class="stat-label">Total Items</div>
                     </div>
-                    <div class="activity-row">
-                        <span>Favorites:</span>
-                        <span id="statFavorites">0 items</span>
+                    <div class="stat-card">
+                        <div class="stat-value" id="statTotalValue">$0</div>
+                        <div class="stat-label">Total Value</div>
                     </div>
-                    <div class="activity-row">
-                        <span>Oldest item:</span>
-                        <span id="statOldestItem">-</span>
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="statReadyToBuy">0</div>
+                        <div class="stat-label">Ready to Buy</div>
                     </div>
-                    <div class="activity-row">
-                        <span>Price drops:</span>
-                        <span id="statPriceDrops">0 items</span>
+                    <div class="stat-card highlight">
+                        <div class="stat-value" id="statReadyValue">$0</div>
+                        <div class="stat-label">Cart Value</div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Items Missing Data -->
-            <div class="settings-section missing-data-section">
-                <h3>
-                    Missing Images
-                    <span class="missing-count" id="missingCount"></span>
-                </h3>
-                <p class="missing-info">Items imported without images will show a "?" placeholder.</p>
-                <div id="missingDataList" class="missing-data-list"></div>
-            </div>
-
-            <!-- Potential Duplicates -->
-            <div class="settings-section duplicates-section">
-                <h3>
-                    Potential Duplicates
-                    <span class="duplicate-count" id="duplicateCount"></span>
-                </h3>
-                <div id="duplicatesList" class="duplicates-list">
-                    <p class="duplicates-loading">Checking for duplicates...</p>
                 </div>
             </div>
 
@@ -204,6 +128,13 @@
                     <li><strong>Drag items</strong> to reorder them</li>
                     <li>Use <strong>category tabs</strong> to filter</li>
                 </ul>
+            </div>
+
+            <!-- Admin link -->
+            <div class="settings-section" style="text-align: center; padding-top: 12px; border-top: 1px solid var(--primary-200);">
+                <a href="/admin" class="btn btn-secondary btn-small" style="width: 100%;">
+                    <span>&#9881;</span> Admin Console
+                </a>
             </div>
         </div>
     </aside>

@@ -261,17 +261,31 @@ function showResult(message, success, data = null, scrapeStats = null) {
       html += `<div class="stat-ok">&#10003; Found ${scrapeStats.total} items</div>`;
     }
 
+    // Show which method was used
+    const methodNames = {
+      'api_capture': 'API capture (best)',
+      'js_state': 'JS state',
+      'script_tags': 'Script tags',
+      'dom_scraping': 'DOM scraping (fallback)',
+    };
+    if (scrapeStats.method) {
+      html += `<div class="stat-detail">Method: ${methodNames[scrapeStats.method] || scrapeStats.method}</div>`;
+    }
+
     // Show data quality
     const imgPercent = scrapeStats.total > 0 ? Math.round((scrapeStats.withImage / scrapeStats.total) * 100) : 0;
     const pricePercent = scrapeStats.total > 0 ? Math.round((scrapeStats.withPrice / scrapeStats.total) * 100) : 0;
 
-    if (imgPercent < 100 || pricePercent < 100) {
-      html += `
-        <div class="stat-detail">
-          Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) |
-          Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)
-        </div>
-      `;
+    html += `<div class="stat-detail">`;
+    html += `Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) | `;
+    html += `Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)`;
+    html += `</div>`;
+
+    const noPriceCount = scrapeStats.total - scrapeStats.withPrice;
+    if (noPriceCount > 0) {
+      html += `<div class="stat-warning">&#9888; ${noPriceCount} item(s) have no price — try refreshing the cart page and importing again</div>`;
+      elements.result.classList.remove('success');
+      elements.result.classList.add('warning');
     }
 
     html += `</div>`;
@@ -352,6 +366,37 @@ function scrollToLoadAllItems() {
   });
 }
 
+// Helper: pick the best sale/current price from a Temu data object.
+// Temu stores `price` = original full price, `salePrice` = discounted price.
+// We want the sale price (what the customer actually pays).
+function pickBestPrice(obj) {
+  // Try sale/discount price fields first (the actual price to pay)
+  const candidates = [
+    obj.sale_price, obj.salePrice, obj.salePriceCent,
+    obj.promo_price, obj.promoPrice,
+    obj.discount_price, obj.discountPrice,
+    obj.current_price, obj.currentPrice,
+    obj.price, obj.priceCent,
+  ];
+  let best = null;
+  let original = null;
+  for (const v of candidates) {
+    const n = parseFloat(v);
+    if (!isNaN(n) && n > 0) {
+      if (best === null) best = n;
+      // Keep going to find the highest as original_price
+      if (original === null || n > original) original = n;
+    }
+  }
+  // Normalize cents (Temu sometimes returns 1299 meaning $12.99)
+  if (best !== null && best > 100 && Number.isInteger(best)) best = best / 100;
+  if (original !== null && original > 100 && Number.isInteger(original)) original = original / 100;
+  // Validate range
+  if (best !== null && (best < 0.01 || best > 99999)) best = null;
+  if (original !== null && (original < 0.01 || original > 99999)) original = null;
+  return { salePrice: best, originalPrice: original };
+}
+
 // Multi-tab scraper for Temu - clicks through each filter tab and collects all items
 // This runs in the context of the page
 async function scrapeTemuAllTabs() {
@@ -360,8 +405,103 @@ async function scrapeTemuAllTabs() {
 
   console.log('[Judi\'s Wishlist] === MULTI-TAB SCRAPER ===');
 
+  // === METHOD 0: Use captured cart API data from network interceptor ===
+  // The interceptor.js content script patches fetch/XHR on page load and
+  // captures any response containing cart item data. This is the most
+  // reliable method because it's the EXACT data Temu's own UI renders.
+  // The data was already captured when the page loaded — we just retrieve it.
+  console.log('[Judi\'s Wishlist] METHOD 0: Checking captured API data...');
+  // NOTE: This code runs in the PAGE context (executeScript), so we can't
+  // call chrome.runtime directly. Instead, check if the interceptor left
+  // data on window for us.
+  try {
+    // The interceptor stores captured data on the page via a custom event
+    // that the bridge picks up. But from page context we can also check
+    // if there's data stashed. Let's try reading it via a DOM approach:
+    // We dispatch a request event and listen for the response.
+    const capturedData = await new Promise((resolve) => {
+      const handler = (event) => {
+        if (event.data?.type === '__JWL_CART_DATA_RESPONSE__') {
+          window.removeEventListener('message', handler);
+          resolve(event.data.entries || []);
+        }
+      };
+      window.addEventListener('message', handler);
+      window.postMessage({ type: '__JWL_CART_DATA_REQUEST__' }, '*');
+      // Timeout after 500ms
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        resolve([]);
+      }, 500);
+    });
+
+    for (const entry of capturedData) {
+      const apiJson = entry.data;
+      if (!apiJson || typeof apiJson !== 'object') continue;
+      console.log(`[Judi's Wishlist] Processing captured data from: ${entry.endpoint}`);
+
+      // Navigate Temu's response structure to find cart items array
+      // Recursively search for arrays containing goods_id objects
+      function findItemArrays(obj, depth) {
+        if (!obj || typeof obj !== 'object' || depth > 6) return [];
+        const results = [];
+        if (Array.isArray(obj)) {
+          if (obj.length > 0 && obj.some(i => i?.goods_id || i?.goodsId || i?.product_id)) {
+            results.push(obj);
+          }
+        } else {
+          for (const val of Object.values(obj)) {
+            results.push(...findItemArrays(val, depth + 1));
+          }
+        }
+        return results;
+      }
+
+      const itemArrays = findItemArrays(apiJson, 0);
+      // Use the largest array (most items = the cart list, not a sub-component)
+      const allFoundItems = itemArrays.sort((a, b) => b.length - a.length);
+
+      for (const itemArray of allFoundItems) {
+        for (const item of itemArray) {
+          const productId = String(item.goods_id || item.goodsId || item.product_id || item.subjectId || '');
+          if (!productId || allItems.has(productId)) continue;
+
+          const image = item.thumb_url || item.thumbUrl || item.image || item.goods_img || item.hdThumbUrl || null;
+          const { salePrice, originalPrice } = pickBestPrice(item);
+
+          let productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+          if (image) productUrl += '&thumb_url=' + encodeURIComponent(image);
+
+          allItems.set(productId, {
+            product_id: productId,
+            product_url: productUrl,
+            title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
+            image_url: image,
+            price: salePrice,
+            original_price: originalPrice,
+            quantity: Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1),
+          });
+        }
+      }
+
+      if (allItems.size > 0) {
+        console.log(`[Judi's Wishlist] SUCCESS: Got ${allItems.size} items from captured API data`);
+        const finalItems = Array.from(allItems.values());
+        stats.total = finalItems.length;
+        stats.withImage = finalItems.filter(i => i.image_url).length;
+        stats.withPrice = finalItems.filter(i => i.price).length;
+        stats.method = 'api_capture';
+        finalItems._stats = stats;
+        return finalItems;
+      }
+    }
+    console.log('[Judi\'s Wishlist] No captured API data available (page may need refresh)');
+  } catch (e) {
+    console.log('[Judi\'s Wishlist] METHOD 0 failed:', e.message);
+  }
+
   // === METHOD 1: Try to find cart data in JavaScript/JSON ===
-  console.log('[Judi\'s Wishlist] Attempting to find cart data in page JavaScript...');
+  console.log('[Judi\'s Wishlist] METHOD 1: Checking page JavaScript state...');
 
   // Look for cart data in common locations
   const dataLocations = [
@@ -388,15 +528,22 @@ async function scrapeTemuAllTabs() {
             productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
           }
 
-          const rawPrice = parseFloat(item.price || item.sale_price || item.salePrice || item.current_price);
-          const validPrice = (!isNaN(rawPrice) && isFinite(rawPrice) && rawPrice > 0.01 && rawPrice < 99999) ? rawPrice : null;
+          const { salePrice, originalPrice } = pickBestPrice(item);
+
+          const itemImage = item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null;
+          // Embed thumb_url in product URL for server-side image recovery
+          let finalUrl = productUrl;
+          if (itemImage && !finalUrl.includes('thumb_url=')) {
+            finalUrl += (finalUrl.includes('?') ? '&' : '?') + 'thumb_url=' + encodeURIComponent(itemImage);
+          }
 
           allItems.set(String(productId), {
             product_id: String(productId),
-            product_url: productUrl,
+            product_url: finalUrl,
             title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
-            image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null,
-            price: validPrice,
+            image_url: itemImage,
+            price: salePrice,
+            original_price: originalPrice,
             quantity: Math.max(1, parseInt(item.quantity || item.qty) || 1),
           });
         });
@@ -407,6 +554,7 @@ async function scrapeTemuAllTabs() {
           stats.total = finalItems.length;
           stats.withImage = finalItems.filter(i => i.image_url).length;
           stats.withPrice = finalItems.filter(i => i.price).length;
+          stats.method = 'js_state';
           finalItems._stats = stats;
           return finalItems;
         }
@@ -443,12 +591,22 @@ async function scrapeTemuAllTabs() {
           const priceMatch = context.match(/"(?:price|sale_price|salePrice)"\s*:\s*(\d+\.?\d*)/);
 
           if (titleMatch || imgMatch) {
+            const scriptImage = imgMatch ? imgMatch[1].replace(/\\/g, '') : null;
+            let scriptUrl = `https://www.temu.com/goods.html?goods_id=${goodsId}`;
+            if (scriptImage) {
+              scriptUrl += '&thumb_url=' + encodeURIComponent(scriptImage);
+            }
+            // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
+            let scriptPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
+            if (scriptPrice && scriptPrice > 100 && Number.isInteger(scriptPrice)) {
+              scriptPrice = scriptPrice / 100;
+            }
             allItems.set(goodsId, {
               product_id: goodsId,
-              product_url: `https://www.temu.com/goods.html?goods_id=${goodsId}`,
+              product_url: scriptUrl,
               title: titleMatch ? titleMatch[1] : 'Unknown Product',
-              image_url: imgMatch ? imgMatch[1].replace(/\\/g, '') : null,
-              price: priceMatch ? parseFloat(priceMatch[1]) : null,
+              image_url: scriptImage,
+              price: scriptPrice,
               quantity: 1,
             });
           }
@@ -457,12 +615,15 @@ async function scrapeTemuAllTabs() {
     }
   }
 
-  if (allItems.size > 50) {
-    console.log(`[Judi\'s Wishlist] Found ${allItems.size} items from script tags`);
+  // Return script tag results if we found items with meaningful data (title or image)
+  const scriptItemsWithData = Array.from(allItems.values()).filter(i => i.title !== 'Unknown Product' || i.image_url);
+  if (scriptItemsWithData.length > 0) {
+    console.log(`[Judi\'s Wishlist] Found ${allItems.size} items from script tags (${scriptItemsWithData.length} with data)`);
     const finalItems = Array.from(allItems.values());
     stats.total = finalItems.length;
     stats.withImage = finalItems.filter(i => i.image_url).length;
     stats.withPrice = finalItems.filter(i => i.price).length;
+    stats.method = 'script_tags';
     finalItems._stats = stats;
     return finalItems;
   }
@@ -587,48 +748,92 @@ async function scrapeTemuAllTabs() {
         }
       }
 
-      // Get price - try multiple approaches
+      // Get price — careful to avoid strikethrough prices and shipping costs.
+      // Strategy: find ALL price elements, classify each, pick the best.
       let price = null;
-      // Method 1: Look for elements with price-like classes
-      const priceSelectors = [
-        '[class*="price"]',
-        '[class*="Price"]',
-        '[class*="cost"]',
-        '[class*="Cost"]',
-        '[data-testid*="price"]',
-      ];
-      for (const sel of priceSelectors) {
-        const priceEl = container?.querySelector(sel);
-        if (priceEl) {
-          const priceMatch = priceEl.textContent?.match(/\$\s*([\d,]+\.?\d*)/);
-          if (priceMatch) {
-            const parsed = parseFloat(priceMatch[1].replace(/,/g, ''));
-            if (!isNaN(parsed) && isFinite(parsed) && parsed > 0.01 && parsed < 99999) {
-              price = parsed;
-              break;
-            }
+      let originalPrice = null;
+
+      if (container) {
+        // Collect all price elements and their context
+        const priceEls = container.querySelectorAll(
+          '[class*="price"], [class*="Price"], [class*="cost"], [class*="Cost"], [data-testid*="price"]'
+        );
+        const salePrices = [];
+        const strikePrices = [];
+        const otherPrices = [];
+
+        for (const el of priceEls) {
+          const priceMatch = el.textContent?.match(/\$\s*([\d,]+\.?\d*)/);
+          if (!priceMatch) continue;
+          const val = parseFloat(priceMatch[1].replace(/,/g, ''));
+          if (isNaN(val) || val < 0.01 || val > 99999) continue;
+
+          const classes = (el.className || '').toLowerCase();
+          const parentClasses = (el.parentElement?.className || '').toLowerCase();
+          const style = el.style || {};
+          const computedStyle = window.getComputedStyle?.(el) || {};
+
+          // Detect strikethrough/original prices
+          const isStrike = (
+            computedStyle.textDecoration?.includes('line-through') ||
+            style.textDecoration?.includes('line-through') ||
+            classes.includes('origin') || classes.includes('original') ||
+            classes.includes('strike') || classes.includes('delete') ||
+            classes.includes('old') || classes.includes('was') ||
+            parentClasses.includes('origin') || parentClasses.includes('original') ||
+            el.closest('del, s, strike') !== null
+          );
+
+          // Detect shipping prices
+          const isShipping = (
+            classes.includes('shipping') || classes.includes('delivery') ||
+            parentClasses.includes('shipping') || parentClasses.includes('delivery') ||
+            el.closest('[class*="shipping"], [class*="delivery"]') !== null
+          );
+
+          if (isShipping) continue; // Skip shipping prices entirely
+
+          if (isStrike) {
+            strikePrices.push(val);
+          } else if (classes.includes('sale') || classes.includes('promo') ||
+                     classes.includes('discount') || classes.includes('current')) {
+            salePrices.push(val);
+          } else {
+            otherPrices.push(val);
           }
         }
-      }
-      // Method 2: Search entire container for price pattern
-      if (!price && container) {
-        // Look for prices, prefer the "current" price (usually the lower one after discount)
-        const allPrices = container.textContent?.match(/\$\s*([\d,]+\.?\d*)/g) || [];
-        if (allPrices.length > 0) {
-          // Parse all prices and take the lowest (usually the sale price)
-          const priceValues = allPrices
+
+        // Pick price: sale > other > strike (last resort)
+        if (salePrices.length > 0) {
+          price = Math.min(...salePrices);
+        } else if (otherPrices.length > 0) {
+          // If there are strikethrough prices too, the non-strike price is the sale price
+          price = Math.min(...otherPrices);
+        }
+        // Original price is the strikethrough or the highest price
+        if (strikePrices.length > 0) {
+          originalPrice = Math.max(...strikePrices);
+        }
+
+        // Fallback: parse all $ values from container text
+        if (!price) {
+          const allPriceMatches = container.textContent?.match(/\$\s*([\d,]+\.?\d*)/g) || [];
+          const parsed = allPriceMatches
             .map(p => parseFloat(p.replace(/[\$\s,]/g, '')))
-            .filter(p => !isNaN(p) && isFinite(p) && p > 0.01 && p < 99999);
-          if (priceValues.length > 0) {
-            price = Math.min(...priceValues);
+            .filter(p => !isNaN(p) && p > 0.01 && p < 99999);
+          if (parsed.length === 1) {
+            price = parsed[0]; // Only one price visible = it's the price
+          } else if (parsed.length >= 2) {
+            // Two prices: lower is sale, higher is original
+            price = Math.min(...parsed);
+            originalPrice = Math.max(...parsed);
           }
         }
-      }
-      // Method 3: Check for "LAST DAY" or sale price patterns
-      if (!price && container) {
-        const saleMatch = container.textContent?.match(/LAST DAY\s*\$(\d+\.?\d*)/i);
-        if (saleMatch) {
-          price = parseFloat(saleMatch[1]);
+
+        // Last resort: "LAST DAY $X.XX" pattern
+        if (!price) {
+          const saleMatch = container.textContent?.match(/LAST DAY\s*\$(\d+\.?\d*)/i);
+          if (saleMatch) price = parseFloat(saleMatch[1]);
         }
       }
 
@@ -639,12 +844,19 @@ async function scrapeTemuAllTabs() {
         quantity = parseInt(qtyEl.value) || 1;
       }
 
+      // Embed thumb_url in product URL for server-side image recovery
+      let domProductUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+      if (imageUrl) {
+        domProductUrl += '&thumb_url=' + encodeURIComponent(imageUrl);
+      }
+
       items.push({
         product_id: productId,
-        product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+        product_url: domProductUrl,
         title: title,
         image_url: imageUrl,
         price: price,
+        original_price: originalPrice && originalPrice > (price || 0) ? originalPrice : undefined,
         quantity: quantity,
       });
     });
@@ -827,6 +1039,7 @@ async function scrapeTemuAllTabs() {
   console.log(`[Judi\'s Wishlist] With prices: ${stats.withPrice} (${Math.round(stats.withPrice/stats.total*100)}%)`);
 
   // Attach stats
+  stats.method = 'dom_scraping';
   finalItems._stats = stats;
 
   return finalItems;
@@ -1080,9 +1293,15 @@ function scrapeCartItems(store) {
         });
       }
 
+      // Embed thumb_url in product URL for server-side image recovery
+      let shareProductUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+      if (imageUrl) {
+        shareProductUrl += '&thumb_url=' + encodeURIComponent(imageUrl);
+      }
+
       items.push({
         product_id: productId,
-        product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+        product_url: shareProductUrl,
         title: title,
         image_url: imageUrl,
         price: price,
@@ -1445,6 +1664,151 @@ elements.refreshImagesBtn.addEventListener('click', refreshImages);
 elements.shareLink.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') {
     importFromShareLink();
+  }
+});
+
+// Diagnostic tool — runs on the Temu cart page and reports exactly what data
+// is available. Shows intercepted API structure, window state, DOM stats.
+// Output can be copy/pasted for debugging.
+document.getElementById('diagLink')?.addEventListener('click', async (e) => {
+  e.preventDefault();
+  const diagResult = document.getElementById('diagnosticResult');
+  diagResult.classList.remove('hidden');
+  diagResult.textContent = 'Running diagnostics...';
+
+  if (!currentTabId) {
+    diagResult.textContent = 'No active tab found. Navigate to a Temu cart page first.';
+    return;
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      func: function() {
+        const diag = { url: location.href, timestamp: new Date().toISOString() };
+
+        // 1. Check intercepted API data
+        diag.interceptor = { available: false, entries: [] };
+        try {
+          const p = new Promise((resolve) => {
+            const h = (event) => {
+              if (event.data?.type === '__JWL_CART_DATA_RESPONSE__') {
+                window.removeEventListener('message', h);
+                resolve(event.data.entries || []);
+              }
+            };
+            window.addEventListener('message', h);
+            window.postMessage({ type: '__JWL_CART_DATA_REQUEST__' }, '*');
+            setTimeout(() => { window.removeEventListener('message', h); resolve([]); }, 1000);
+          });
+          // Can't await in sync, use callback approach
+          // Actually executeScript supports async, so let's return a promise
+          return p.then(entries => {
+            diag.interceptor.available = entries.length > 0;
+            for (const entry of entries) {
+              const summary = { endpoint: entry.endpoint };
+              // Map the structure: show keys at each level, and for arrays, show first item's keys
+              function mapStructure(obj, depth) {
+                if (!obj || depth > 4) return typeof obj;
+                if (Array.isArray(obj)) {
+                  return { _type: 'array', _length: obj.length, _firstItemKeys: obj[0] ? Object.keys(obj[0]).slice(0, 30) : [] };
+                }
+                if (typeof obj === 'object') {
+                  const result = {};
+                  for (const [k, v] of Object.entries(obj).slice(0, 20)) {
+                    result[k] = mapStructure(v, depth + 1);
+                  }
+                  return result;
+                }
+                return typeof obj;
+              }
+              summary.structure = mapStructure(entry.data, 0);
+
+              // Find any array with goods_id items and show a SAMPLE item
+              function findSampleItem(obj, depth) {
+                if (!obj || depth > 5) return null;
+                if (Array.isArray(obj)) {
+                  const item = obj.find(i => i?.goods_id || i?.goodsId);
+                  if (item) {
+                    // Return keys and sample values (truncated)
+                    const sample = {};
+                    for (const [k, v] of Object.entries(item)) {
+                      if (typeof v === 'string') sample[k] = v.substring(0, 80);
+                      else if (typeof v === 'number' || typeof v === 'boolean') sample[k] = v;
+                      else if (Array.isArray(v)) sample[k] = `[array: ${v.length}]`;
+                      else if (v && typeof v === 'object') sample[k] = `{${Object.keys(v).slice(0, 5).join(',')}}`;
+                      else sample[k] = String(v);
+                    }
+                    return sample;
+                  }
+                }
+                if (typeof obj === 'object' && !Array.isArray(obj)) {
+                  for (const v of Object.values(obj)) {
+                    const found = findSampleItem(v, depth + 1);
+                    if (found) return found;
+                  }
+                }
+                return null;
+              }
+              summary.sampleItem = findSampleItem(entry.data, 0);
+              diag.interceptor.entries.push(summary);
+            }
+
+            // 2. Check window state locations
+            diag.windowState = {};
+            const locations = [
+              '__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
+              'cartData', 'pageData', '__APP_DATA__', '__SSR_DATA__',
+            ];
+            for (const loc of locations) {
+              try {
+                const val = window[loc];
+                if (val) {
+                  diag.windowState[loc] = Object.keys(val).slice(0, 15);
+                }
+              } catch (e) {}
+            }
+
+            // 3. DOM stats
+            diag.dom = {};
+            diag.dom.productLinks = {
+              'goods_id': document.querySelectorAll('a[href*="goods_id="]').length,
+              '_p_': document.querySelectorAll('a[href*="_p_"]').length,
+              '/product/': document.querySelectorAll('a[href*="/product/"]').length,
+              'subject_id': document.querySelectorAll('a[href*="subject_id="]').length,
+            };
+            diag.dom.priceElements = document.querySelectorAll('[class*="price"], [class*="Price"]').length;
+            diag.dom.images = document.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"]').length;
+            diag.dom.scriptTags = document.querySelectorAll('script:not([src])').length;
+
+            // 4. Check for cart-related script content
+            const scripts = document.querySelectorAll('script:not([src])');
+            let cartScriptFound = false;
+            for (const s of scripts) {
+              if (s.textContent?.includes('goods_id') || s.textContent?.includes('goodsId')) {
+                cartScriptFound = true;
+                break;
+              }
+            }
+            diag.dom.hasCartDataInScripts = cartScriptFound;
+
+            return diag;
+          });
+        } catch (e) {
+          diag.interceptor.error = e.message;
+          return diag;
+        }
+      },
+    });
+
+    const diag = results[0]?.result;
+    if (diag) {
+      diagResult.innerHTML = `<strong>Diagnostic Report</strong> (copy all below):<br><pre style="white-space:pre-wrap;font-size:9px;">${JSON.stringify(diag, null, 2)}</pre>`;
+    } else {
+      diagResult.textContent = 'No diagnostic data returned. Make sure you are on a Temu page.';
+    }
+  } catch (err) {
+    diagResult.textContent = 'Error: ' + err.message;
   }
 });
 
