@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Judi's Wishlist Importer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Import items from Temu and Amazon carts to Judi's Wishlist",
   "permissions": [
     "activeTab",
     "scripting",
-    "tabs"
+    "tabs",
+    "webRequest"
   ],
   "host_permissions": [
     "http://localhost:5000/*",
@@ -31,6 +32,17 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": ["*://*.temu.com/*"],
+      "js": ["content/interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*.temu.com/*"],
+      "js": ["content/interceptor_bridge.js"],
+      "run_at": "document_start"
+    },
     {
       "matches": ["*://*.temu.com/*"],
       "js": ["content/temu.js"],

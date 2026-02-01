@@ -261,17 +261,31 @@ function showResult(message, success, data = null, scrapeStats = null) {
       html += `<div class="stat-ok">&#10003; Found ${scrapeStats.total} items</div>`;
     }
 
+    // Show which method was used
+    const methodNames = {
+      'api_capture': 'API capture (best)',
+      'js_state': 'JS state',
+      'script_tags': 'Script tags',
+      'dom_scraping': 'DOM scraping (fallback)',
+    };
+    if (scrapeStats.method) {
+      html += `<div class="stat-detail">Method: ${methodNames[scrapeStats.method] || scrapeStats.method}</div>`;
+    }
+
     // Show data quality
     const imgPercent = scrapeStats.total > 0 ? Math.round((scrapeStats.withImage / scrapeStats.total) * 100) : 0;
     const pricePercent = scrapeStats.total > 0 ? Math.round((scrapeStats.withPrice / scrapeStats.total) * 100) : 0;
 
-    if (imgPercent < 100 || pricePercent < 100) {
-      html += `
-        <div class="stat-detail">
-          Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) |
-          Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)
-        </div>
-      `;
+    html += `<div class="stat-detail">`;
+    html += `Images: ${scrapeStats.withImage}/${scrapeStats.total} (${imgPercent}%) | `;
+    html += `Prices: ${scrapeStats.withPrice}/${scrapeStats.total} (${pricePercent}%)`;
+    html += `</div>`;
+
+    const noPriceCount = scrapeStats.total - scrapeStats.withPrice;
+    if (noPriceCount > 0) {
+      html += `<div class="stat-warning">&#9888; ${noPriceCount} item(s) have no price — try refreshing the cart page and importing again</div>`;
+      elements.result.classList.remove('success');
+      elements.result.classList.add('warning');
     }
 
     html += `</div>`;
@@ -391,66 +405,64 @@ async function scrapeTemuAllTabs() {
 
   console.log('[Judi\'s Wishlist] === MULTI-TAB SCRAPER ===');
 
-  // === METHOD 0: Intercept Temu's cart API directly ===
-  // Temu's frontend fetches cart data from its own API. We call it directly
-  // using the user's session cookies (extension has host_permissions on temu.com).
-  // This returns structured JSON — no DOM scraping needed.
-  console.log('[Judi\'s Wishlist] METHOD 0: Trying direct cart API call...');
+  // === METHOD 0: Use captured cart API data from network interceptor ===
+  // The interceptor.js content script patches fetch/XHR on page load and
+  // captures any response containing cart item data. This is the most
+  // reliable method because it's the EXACT data Temu's own UI renders.
+  // The data was already captured when the page loaded — we just retrieve it.
+  console.log('[Judi\'s Wishlist] METHOD 0: Checking captured API data...');
+  // NOTE: This code runs in the PAGE context (executeScript), so we can't
+  // call chrome.runtime directly. Instead, check if the interceptor left
+  // data on window for us.
   try {
-    const cartApiEndpoints = [
-      '/api/bg/quiet/cart/query',
-      '/api/server/_stk/query/cart/listCart',
-      '/api/phantom/cart/get',
-    ];
-    for (const endpoint of cartApiEndpoints) {
-      try {
-        const apiResp = await fetch(`https://www.temu.com${endpoint}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-          },
-          credentials: 'include',
-          body: JSON.stringify({}),
-        });
-        if (!apiResp.ok) continue;
-        const apiJson = await apiResp.json();
-        console.log(`[Judi's Wishlist] Cart API ${endpoint} responded:`, Object.keys(apiJson));
-
-        // Navigate Temu's response structure to find cart items array
-        const possiblePaths = [
-          apiJson?.result?.cartGroupList,
-          apiJson?.result?.goodsList,
-          apiJson?.result?.items,
-          apiJson?.data?.cartGroupList,
-          apiJson?.data?.goodsList,
-          apiJson?.data?.items,
-          apiJson?.cartGroupList,
-          apiJson?.goodsList,
-        ];
-
-        let cartGroups = null;
-        for (const p of possiblePaths) {
-          if (Array.isArray(p) && p.length > 0) { cartGroups = p; break; }
+    // The interceptor stores captured data on the page via a custom event
+    // that the bridge picks up. But from page context we can also check
+    // if there's data stashed. Let's try reading it via a DOM approach:
+    // We dispatch a request event and listen for the response.
+    const capturedData = await new Promise((resolve) => {
+      const handler = (event) => {
+        if (event.data?.type === '__JWL_CART_DATA_RESPONSE__') {
+          window.removeEventListener('message', handler);
+          resolve(event.data.entries || []);
         }
-        if (!cartGroups) continue;
+      };
+      window.addEventListener('message', handler);
+      window.postMessage({ type: '__JWL_CART_DATA_REQUEST__' }, '*');
+      // Timeout after 500ms
+      setTimeout(() => {
+        window.removeEventListener('message', handler);
+        resolve([]);
+      }, 500);
+    });
 
-        // Cart groups may contain sub-items (e.g., grouped by warehouse)
-        const flatItems = [];
-        for (const group of cartGroups) {
-          if (group.goods_id || group.goodsId) {
-            flatItems.push(group);
+    for (const entry of capturedData) {
+      const apiJson = entry.data;
+      if (!apiJson || typeof apiJson !== 'object') continue;
+      console.log(`[Judi's Wishlist] Processing captured data from: ${entry.endpoint}`);
+
+      // Navigate Temu's response structure to find cart items array
+      // Recursively search for arrays containing goods_id objects
+      function findItemArrays(obj, depth) {
+        if (!obj || typeof obj !== 'object' || depth > 6) return [];
+        const results = [];
+        if (Array.isArray(obj)) {
+          if (obj.length > 0 && obj.some(i => i?.goods_id || i?.goodsId || i?.product_id)) {
+            results.push(obj);
           }
-          // Sub-items within a group
-          const subItems = group.cartItemList || group.goodsList || group.items || group.cartGoods || [];
-          if (Array.isArray(subItems)) {
-            flatItems.push(...subItems);
+        } else {
+          for (const val of Object.values(obj)) {
+            results.push(...findItemArrays(val, depth + 1));
           }
         }
+        return results;
+      }
 
-        console.log(`[Judi's Wishlist] Found ${flatItems.length} items from cart API`);
+      const itemArrays = findItemArrays(apiJson, 0);
+      // Use the largest array (most items = the cart list, not a sub-component)
+      const allFoundItems = itemArrays.sort((a, b) => b.length - a.length);
 
-        for (const item of flatItems) {
+      for (const itemArray of allFoundItems) {
+        for (const item of itemArray) {
           const productId = String(item.goods_id || item.goodsId || item.product_id || item.subjectId || '');
           if (!productId || allItems.has(productId)) continue;
 
@@ -470,20 +482,20 @@ async function scrapeTemuAllTabs() {
             quantity: Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1),
           });
         }
+      }
 
-        if (allItems.size > 0) {
-          console.log(`[Judi's Wishlist] SUCCESS: Got ${allItems.size} items from cart API (${endpoint})`);
-          const finalItems = Array.from(allItems.values());
-          stats.total = finalItems.length;
-          stats.withImage = finalItems.filter(i => i.image_url).length;
-          stats.withPrice = finalItems.filter(i => i.price).length;
-          finalItems._stats = stats;
-          return finalItems;
-        }
-      } catch (e) {
-        console.log(`[Judi's Wishlist] Cart API ${endpoint} failed:`, e.message);
+      if (allItems.size > 0) {
+        console.log(`[Judi's Wishlist] SUCCESS: Got ${allItems.size} items from captured API data`);
+        const finalItems = Array.from(allItems.values());
+        stats.total = finalItems.length;
+        stats.withImage = finalItems.filter(i => i.image_url).length;
+        stats.withPrice = finalItems.filter(i => i.price).length;
+        stats.method = 'api_capture';
+        finalItems._stats = stats;
+        return finalItems;
       }
     }
+    console.log('[Judi\'s Wishlist] No captured API data available (page may need refresh)');
   } catch (e) {
     console.log('[Judi\'s Wishlist] METHOD 0 failed:', e.message);
   }
@@ -542,6 +554,7 @@ async function scrapeTemuAllTabs() {
           stats.total = finalItems.length;
           stats.withImage = finalItems.filter(i => i.image_url).length;
           stats.withPrice = finalItems.filter(i => i.price).length;
+          stats.method = 'js_state';
           finalItems._stats = stats;
           return finalItems;
         }
@@ -602,12 +615,15 @@ async function scrapeTemuAllTabs() {
     }
   }
 
-  if (allItems.size > 50) {
-    console.log(`[Judi\'s Wishlist] Found ${allItems.size} items from script tags`);
+  // Return script tag results if we found items with meaningful data (title or image)
+  const scriptItemsWithData = Array.from(allItems.values()).filter(i => i.title !== 'Unknown Product' || i.image_url);
+  if (scriptItemsWithData.length > 0) {
+    console.log(`[Judi\'s Wishlist] Found ${allItems.size} items from script tags (${scriptItemsWithData.length} with data)`);
     const finalItems = Array.from(allItems.values());
     stats.total = finalItems.length;
     stats.withImage = finalItems.filter(i => i.image_url).length;
     stats.withPrice = finalItems.filter(i => i.price).length;
+    stats.method = 'script_tags';
     finalItems._stats = stats;
     return finalItems;
   }
@@ -732,48 +748,92 @@ async function scrapeTemuAllTabs() {
         }
       }
 
-      // Get price - try multiple approaches
+      // Get price — careful to avoid strikethrough prices and shipping costs.
+      // Strategy: find ALL price elements, classify each, pick the best.
       let price = null;
-      // Method 1: Look for elements with price-like classes
-      const priceSelectors = [
-        '[class*="price"]',
-        '[class*="Price"]',
-        '[class*="cost"]',
-        '[class*="Cost"]',
-        '[data-testid*="price"]',
-      ];
-      for (const sel of priceSelectors) {
-        const priceEl = container?.querySelector(sel);
-        if (priceEl) {
-          const priceMatch = priceEl.textContent?.match(/\$\s*([\d,]+\.?\d*)/);
-          if (priceMatch) {
-            const parsed = parseFloat(priceMatch[1].replace(/,/g, ''));
-            if (!isNaN(parsed) && isFinite(parsed) && parsed > 0.01 && parsed < 99999) {
-              price = parsed;
-              break;
-            }
+      let originalPrice = null;
+
+      if (container) {
+        // Collect all price elements and their context
+        const priceEls = container.querySelectorAll(
+          '[class*="price"], [class*="Price"], [class*="cost"], [class*="Cost"], [data-testid*="price"]'
+        );
+        const salePrices = [];
+        const strikePrices = [];
+        const otherPrices = [];
+
+        for (const el of priceEls) {
+          const priceMatch = el.textContent?.match(/\$\s*([\d,]+\.?\d*)/);
+          if (!priceMatch) continue;
+          const val = parseFloat(priceMatch[1].replace(/,/g, ''));
+          if (isNaN(val) || val < 0.01 || val > 99999) continue;
+
+          const classes = (el.className || '').toLowerCase();
+          const parentClasses = (el.parentElement?.className || '').toLowerCase();
+          const style = el.style || {};
+          const computedStyle = window.getComputedStyle?.(el) || {};
+
+          // Detect strikethrough/original prices
+          const isStrike = (
+            computedStyle.textDecoration?.includes('line-through') ||
+            style.textDecoration?.includes('line-through') ||
+            classes.includes('origin') || classes.includes('original') ||
+            classes.includes('strike') || classes.includes('delete') ||
+            classes.includes('old') || classes.includes('was') ||
+            parentClasses.includes('origin') || parentClasses.includes('original') ||
+            el.closest('del, s, strike') !== null
+          );
+
+          // Detect shipping prices
+          const isShipping = (
+            classes.includes('shipping') || classes.includes('delivery') ||
+            parentClasses.includes('shipping') || parentClasses.includes('delivery') ||
+            el.closest('[class*="shipping"], [class*="delivery"]') !== null
+          );
+
+          if (isShipping) continue; // Skip shipping prices entirely
+
+          if (isStrike) {
+            strikePrices.push(val);
+          } else if (classes.includes('sale') || classes.includes('promo') ||
+                     classes.includes('discount') || classes.includes('current')) {
+            salePrices.push(val);
+          } else {
+            otherPrices.push(val);
           }
         }
-      }
-      // Method 2: Search entire container for price pattern
-      if (!price && container) {
-        // Look for prices, prefer the "current" price (usually the lower one after discount)
-        const allPrices = container.textContent?.match(/\$\s*([\d,]+\.?\d*)/g) || [];
-        if (allPrices.length > 0) {
-          // Parse all prices and take the lowest (usually the sale price)
-          const priceValues = allPrices
+
+        // Pick price: sale > other > strike (last resort)
+        if (salePrices.length > 0) {
+          price = Math.min(...salePrices);
+        } else if (otherPrices.length > 0) {
+          // If there are strikethrough prices too, the non-strike price is the sale price
+          price = Math.min(...otherPrices);
+        }
+        // Original price is the strikethrough or the highest price
+        if (strikePrices.length > 0) {
+          originalPrice = Math.max(...strikePrices);
+        }
+
+        // Fallback: parse all $ values from container text
+        if (!price) {
+          const allPriceMatches = container.textContent?.match(/\$\s*([\d,]+\.?\d*)/g) || [];
+          const parsed = allPriceMatches
             .map(p => parseFloat(p.replace(/[\$\s,]/g, '')))
-            .filter(p => !isNaN(p) && isFinite(p) && p > 0.01 && p < 99999);
-          if (priceValues.length > 0) {
-            price = Math.min(...priceValues);
+            .filter(p => !isNaN(p) && p > 0.01 && p < 99999);
+          if (parsed.length === 1) {
+            price = parsed[0]; // Only one price visible = it's the price
+          } else if (parsed.length >= 2) {
+            // Two prices: lower is sale, higher is original
+            price = Math.min(...parsed);
+            originalPrice = Math.max(...parsed);
           }
         }
-      }
-      // Method 3: Check for "LAST DAY" or sale price patterns
-      if (!price && container) {
-        const saleMatch = container.textContent?.match(/LAST DAY\s*\$(\d+\.?\d*)/i);
-        if (saleMatch) {
-          price = parseFloat(saleMatch[1]);
+
+        // Last resort: "LAST DAY $X.XX" pattern
+        if (!price) {
+          const saleMatch = container.textContent?.match(/LAST DAY\s*\$(\d+\.?\d*)/i);
+          if (saleMatch) price = parseFloat(saleMatch[1]);
         }
       }
 
@@ -796,6 +856,7 @@ async function scrapeTemuAllTabs() {
         title: title,
         image_url: imageUrl,
         price: price,
+        original_price: originalPrice && originalPrice > (price || 0) ? originalPrice : undefined,
         quantity: quantity,
       });
     });
@@ -978,6 +1039,7 @@ async function scrapeTemuAllTabs() {
   console.log(`[Judi\'s Wishlist] With prices: ${stats.withPrice} (${Math.round(stats.withPrice/stats.total*100)}%)`);
 
   // Attach stats
+  stats.method = 'dom_scraping';
   finalItems._stats = stats;
 
   return finalItems;
