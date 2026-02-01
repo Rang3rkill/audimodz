@@ -541,7 +541,9 @@ async function scrapeTemuAllTabs() {
 
           const { salePrice, originalPrice } = pickBestPrice(item);
 
-          const itemImage = item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null;
+          // Filter to string URLs only (item.image can be an object on Temu's API)
+          const imgCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          const itemImage = imgCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           // Embed thumb_url in product URL for server-side image recovery
           let finalUrl = productUrl;
           if (itemImage && !finalUrl.includes('thumb_url=')) {
@@ -598,11 +600,16 @@ async function scrapeTemuAllTabs() {
 
           // Extract data from context
           const titleMatch = context.match(/"(?:goods_name|title|name)"\s*:\s*"([^"]+)"/);
-          const imgMatch = context.match(/"(?:thumb_url|image|img|goods_img)"\s*:\s*"([^"]+)"/);
+          // Prefer thumb_url/long_thumb_url over generic "image" (which may be sale banners)
+          const imgMatch = context.match(/"(?:long_thumb_url|thumb_url|goods_img|hdThumbUrl)"\s*:\s*"(https?:[^"]+)"/);
           const priceMatch = context.match(/"(?:price|sale_price|salePrice)"\s*:\s*(\d+\.?\d*)/);
 
           if (titleMatch || imgMatch) {
-            const scriptImage = imgMatch ? imgMatch[1].replace(/\\/g, '') : null;
+            let scriptImage = imgMatch ? imgMatch[1].replace(/\\/g, '') : null;
+            // Reject obvious sale/promo banner images
+            if (scriptImage && (/\/sale|sale_banner|flash_sale|\/banner|\/promo|upload_aimg|\/aimg\//i.test(scriptImage))) {
+              scriptImage = null;
+            }
             let scriptUrl = `https://www.temu.com/goods.html?goods_id=${goodsId}`;
             if (scriptImage) {
               scriptUrl += '&thumb_url=' + encodeURIComponent(scriptImage);
@@ -734,28 +741,32 @@ async function scrapeTemuAllTabs() {
         title = img?.alt || 'Unknown Product';
       }
 
-      // Get image - try multiple approaches
+      // Get image - try multiple approaches, filtering out sale/promo banners
       let imageUrl = null;
-      // Method 1: Direct img with known CDN
-      const imgSelectors = [
-        'img[src*="img.kwcdn.com"]',
-        'img[src*="kwcdn"]',
-        'img[src*="akamaized"]',
-        'img[data-src*="kwcdn"]',
-        'img[data-src*="akamaized"]',
-      ];
-      for (const sel of imgSelectors) {
-        const img = container?.querySelector(sel);
-        if (img) {
-          imageUrl = img.src || img.dataset?.src || img.getAttribute('data-src');
-          if (imageUrl && imageUrl.startsWith('http')) break;
-        }
+      const BAD_IMG_RE = /\/sale|sale_banner|flash_sale|\/banner|\/promo|upload_aimg|\/aimg\/|icon|logo/i;
+
+      function isProductImage(img) {
+        const src = img.src || img.dataset?.src || img.getAttribute('data-src') || '';
+        if (!src.startsWith('http') || BAD_IMG_RE.test(src)) return false;
+        // Skip images that are too small or banner-shaped (wide aspect ratio)
+        const rect = img.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0 && rect.width / rect.height > 2.5) return false;
+        if (rect.width < 40 || rect.height < 40) return false;
+        return src;
+      }
+
+      // Method 1: Direct img with known CDN (product images)
+      const cdnImgs = container?.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"], img[data-src*="kwcdn"]') || [];
+      for (const img of cdnImgs) {
+        const src = isProductImage(img);
+        if (src) { imageUrl = src; break; }
       }
       // Method 2: Any img with src
       if (!imageUrl) {
-        const anyImg = container?.querySelector('img[src^="http"]');
-        if (anyImg && !anyImg.src.includes('icon') && !anyImg.src.includes('logo')) {
-          imageUrl = anyImg.src;
+        const anyImgs = container?.querySelectorAll('img[src^="http"]') || [];
+        for (const img of anyImgs) {
+          const src = isProductImage(img);
+          if (src) { imageUrl = src; break; }
         }
       }
 

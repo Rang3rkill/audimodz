@@ -66,8 +66,8 @@
 
       // Store locally for popup.js to retrieve
       capturedEntries.push(entry);
-      // Prune old entries
-      const cutoff = Date.now() - 5 * 60 * 1000;
+      // Prune old entries (30 min window - users may browse cart before importing)
+      const cutoff = Date.now() - 30 * 60 * 1000;
       while (capturedEntries.length > 0 && capturedEntries[0].timestamp < cutoff) {
         capturedEntries.shift();
       }
@@ -89,7 +89,7 @@
   window.addEventListener('message', (event) => {
     if (event.source !== window) return;
     if (event.data?.type === '__JWL_CART_DATA_REQUEST__') {
-      const cutoff = Date.now() - 5 * 60 * 1000;
+      const cutoff = Date.now() - 30 * 60 * 1000;
       const recent = capturedEntries.filter(e => e.timestamp > cutoff);
       window.postMessage({ type: '__JWL_CART_DATA_RESPONSE__', entries: recent }, '*');
     }

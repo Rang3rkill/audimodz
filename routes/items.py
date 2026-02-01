@@ -468,7 +468,7 @@ def import_items():
                     # Update image if extension has a better one
                     ext_img = item_data.get('image_url')
                     if ext_img and isinstance(ext_img, str) and ext_img.startswith('http'):
-                        if not existing.get('image_url') or (ext_img != existing.get('image_url') and not has_valid_image(existing)):
+                        if not existing.get('image_url') or ext_img != existing.get('image_url'):
                             price_update['image_url'] = ext_img
                     # Backfill thumb_url into product_url if missing
                     ex_url = existing.get('product_url', '')
@@ -496,8 +496,8 @@ def import_items():
                     ext_image = item_data.get('image_url')
                     if ext_image and isinstance(ext_image, str) and ext_image.startswith('http'):
                         cur_image = existing.get('image_url', '')
-                        # Update if missing OR if extension image differs (extension images are more reliable)
-                        if not cur_image or (ext_image != cur_image and not has_valid_image(existing)):
+                        # Always prefer extension image - it comes from Temu's live API
+                        if not cur_image or ext_image != cur_image:
                             reimport_updates['image_url'] = ext_image
                     if existing.get('original_price') is None and new_price is not None:
                         reimport_updates['original_price'] = new_price
