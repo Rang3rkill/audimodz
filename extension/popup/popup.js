@@ -375,7 +375,7 @@ function pickBestPrice(obj) {
   const ps = pi.price_schema || pi.priceSchema || {};
   // Try sale/discount price fields first (the actual price to pay)
   const candidates = [
-    pi.price, pi.price_str, pi.priceStr, pi.price_text,
+    pi.price, pi.price_str, pi.priceStr, pi.price_text, pi.split_price_text,
     pi.sale_price, pi.salePrice,
     pi.promo_price, pi.discount_price,
     obj.sale_price, obj.salePrice, obj.salePriceCent,
@@ -391,16 +391,22 @@ function pickBestPrice(obj) {
   ];
   // Original/market price candidates
   const originalCandidates = [
-    pi.market_price, pi.marketPrice, pi.market_price_str, pi.market_price_type,
+    pi.market_price, pi.marketPrice, pi.market_price_str,
     pi.original_price, pi.originalPrice,
     obj.market_price, obj.marketPrice,
     obj.original_price, obj.originalPrice,
   ];
 
-  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers
+  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
+  // and Temu's split arrays like ["$","4",".","9","9"]
   function parsePrice(v) {
     if (v == null) return NaN;
     if (typeof v === 'number') return v;
+    if (Array.isArray(v)) {
+      const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
+      if (!joined) return NaN;
+      return parseFloat(joined.replace(/[^0-9.]/g, ''));
+    }
     if (typeof v === 'string') return parseFloat(v.replace(/[^0-9.]/g, ''));
     return NaN;
   }
