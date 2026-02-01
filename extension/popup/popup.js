@@ -474,7 +474,10 @@ async function scrapeTemuAllTabs() {
           const productId = String(item.goods_id || item.goodsId || item.product_id || item.subjectId || '');
           if (!productId || allItems.has(productId)) continue;
 
-          const image = item.thumb_url || item.thumbUrl || item.image || item.goods_img || item.hdThumbUrl || null;
+          // Prefer long_thumb_url (product photo) over thumb_url (may be sale banner).
+          // item.image is an object on the cart API, so filter to strings only.
+          const imageCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          const image = imageCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           const { salePrice, originalPrice } = pickBestPrice(item);
 
           let productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
