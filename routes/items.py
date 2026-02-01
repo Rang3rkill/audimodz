@@ -69,6 +69,17 @@ def extract_goods_id(url):
     return None
 
 
+def ensure_thumb_url(product_url, image_url):
+    """Ensure product_url has thumb_url parameter for server-side image recovery."""
+    if not product_url or not image_url:
+        return product_url
+    if 'thumb_url=' in (product_url or ''):
+        return product_url
+    from urllib.parse import quote
+    separator = '&' if '?' in product_url else '?'
+    return f"{product_url}{separator}thumb_url={quote(image_url, safe='')}"
+
+
 # Rate limiting for scraping
 SCRAPE_DELAY = 1.0  # seconds between scrape requests
 last_scrape_time = 0
@@ -438,12 +449,17 @@ def import_items():
 
                 if new_price is not None and (old_price is None or abs((old_price or 0) - new_price) > 0.001):
                     # Price changed - update the item
-                    Item.update(
-                        existing['id'],
+                    price_update = dict(
                         last_price=old_price,
                         current_price=new_price,
                         price_updated_at=datetime.now().isoformat()
                     )
+                    # Backfill thumb_url into product_url if missing
+                    ex_url = existing.get('product_url', '')
+                    ex_img = item_data.get('image_url') or existing.get('image_url')
+                    if ex_img and 'thumb_url=' not in (ex_url or ''):
+                        price_update['product_url'] = ensure_thumb_url(ex_url, ex_img)
+                    Item.update(existing['id'], **price_update)
                     results.append({
                         'id': existing['id'],
                         'product_id': product_id,
@@ -465,6 +481,11 @@ def import_items():
                         reimport_updates['image_url'] = item_data.get('image_url')
                     if existing.get('original_price') is None and new_price is not None:
                         reimport_updates['original_price'] = new_price
+                    # Backfill thumb_url into product_url if missing
+                    existing_url = existing.get('product_url', '')
+                    backfill_image = item_data.get('image_url') or existing.get('image_url')
+                    if backfill_image and 'thumb_url=' not in (existing_url or ''):
+                        reimport_updates['product_url'] = ensure_thumb_url(existing_url, backfill_image)
                     if reimport_updates:
                         Item.update(existing['id'], **reimport_updates)
 
@@ -476,13 +497,17 @@ def import_items():
                     skipped += 1
                 continue
 
-            # Create new item
+            # Create new item - ensure thumb_url is embedded in product_url
+            import_url = item_data.get('product_url', '')
+            import_image = item_data.get('image_url')
+            import_url = ensure_thumb_url(import_url, import_image)
+
             item = Item.create(
                 store=store,
                 product_id=product_id,
-                product_url=item_data.get('product_url', ''),
+                product_url=import_url,
                 title=item_data.get('title', 'Unknown Product'),
-                image_url=item_data.get('image_url'),
+                image_url=import_image,
                 current_price=new_price,
                 quantity=item_data.get('quantity', 1),
                 list_id=list_id

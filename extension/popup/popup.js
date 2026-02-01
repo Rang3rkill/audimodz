@@ -388,14 +388,25 @@ async function scrapeTemuAllTabs() {
             productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
           }
 
-          const rawPrice = parseFloat(item.price || item.sale_price || item.salePrice || item.current_price);
+          let rawPrice = parseFloat(item.price || item.sale_price || item.salePrice || item.current_price);
+          // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
+          if (!isNaN(rawPrice) && rawPrice > 100 && Number.isInteger(rawPrice)) {
+            rawPrice = rawPrice / 100;
+          }
           const validPrice = (!isNaN(rawPrice) && isFinite(rawPrice) && rawPrice > 0.01 && rawPrice < 99999) ? rawPrice : null;
+
+          const itemImage = item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null;
+          // Embed thumb_url in product URL for server-side image recovery
+          let finalUrl = productUrl;
+          if (itemImage && !finalUrl.includes('thumb_url=')) {
+            finalUrl += (finalUrl.includes('?') ? '&' : '?') + 'thumb_url=' + encodeURIComponent(itemImage);
+          }
 
           allItems.set(String(productId), {
             product_id: String(productId),
-            product_url: productUrl,
+            product_url: finalUrl,
             title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
-            image_url: item.thumb_url || item.thumbUrl || item.image || item.img || item.goods_img || null,
+            image_url: itemImage,
             price: validPrice,
             quantity: Math.max(1, parseInt(item.quantity || item.qty) || 1),
           });
@@ -443,12 +454,22 @@ async function scrapeTemuAllTabs() {
           const priceMatch = context.match(/"(?:price|sale_price|salePrice)"\s*:\s*(\d+\.?\d*)/);
 
           if (titleMatch || imgMatch) {
+            const scriptImage = imgMatch ? imgMatch[1].replace(/\\/g, '') : null;
+            let scriptUrl = `https://www.temu.com/goods.html?goods_id=${goodsId}`;
+            if (scriptImage) {
+              scriptUrl += '&thumb_url=' + encodeURIComponent(scriptImage);
+            }
+            // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
+            let scriptPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
+            if (scriptPrice && scriptPrice > 100 && Number.isInteger(scriptPrice)) {
+              scriptPrice = scriptPrice / 100;
+            }
             allItems.set(goodsId, {
               product_id: goodsId,
-              product_url: `https://www.temu.com/goods.html?goods_id=${goodsId}`,
+              product_url: scriptUrl,
               title: titleMatch ? titleMatch[1] : 'Unknown Product',
-              image_url: imgMatch ? imgMatch[1].replace(/\\/g, '') : null,
-              price: priceMatch ? parseFloat(priceMatch[1]) : null,
+              image_url: scriptImage,
+              price: scriptPrice,
               quantity: 1,
             });
           }
@@ -639,9 +660,15 @@ async function scrapeTemuAllTabs() {
         quantity = parseInt(qtyEl.value) || 1;
       }
 
+      // Embed thumb_url in product URL for server-side image recovery
+      let domProductUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+      if (imageUrl) {
+        domProductUrl += '&thumb_url=' + encodeURIComponent(imageUrl);
+      }
+
       items.push({
         product_id: productId,
-        product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+        product_url: domProductUrl,
         title: title,
         image_url: imageUrl,
         price: price,
@@ -1080,9 +1107,15 @@ function scrapeCartItems(store) {
         });
       }
 
+      // Embed thumb_url in product URL for server-side image recovery
+      let shareProductUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
+      if (imageUrl) {
+        shareProductUrl += '&thumb_url=' + encodeURIComponent(imageUrl);
+      }
+
       items.push({
         product_id: productId,
-        product_url: `https://www.temu.com/goods.html?goods_id=${productId}`,
+        product_url: shareProductUrl,
         title: title,
         image_url: imageUrl,
         price: price,
