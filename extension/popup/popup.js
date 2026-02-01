@@ -1667,5 +1667,150 @@ elements.shareLink.addEventListener('keypress', (e) => {
   }
 });
 
+// Diagnostic tool — runs on the Temu cart page and reports exactly what data
+// is available. Shows intercepted API structure, window state, DOM stats.
+// Output can be copy/pasted for debugging.
+document.getElementById('diagLink')?.addEventListener('click', async (e) => {
+  e.preventDefault();
+  const diagResult = document.getElementById('diagnosticResult');
+  diagResult.classList.remove('hidden');
+  diagResult.textContent = 'Running diagnostics...';
+
+  if (!currentTabId) {
+    diagResult.textContent = 'No active tab found. Navigate to a Temu cart page first.';
+    return;
+  }
+
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: currentTabId },
+      func: function() {
+        const diag = { url: location.href, timestamp: new Date().toISOString() };
+
+        // 1. Check intercepted API data
+        diag.interceptor = { available: false, entries: [] };
+        try {
+          const p = new Promise((resolve) => {
+            const h = (event) => {
+              if (event.data?.type === '__JWL_CART_DATA_RESPONSE__') {
+                window.removeEventListener('message', h);
+                resolve(event.data.entries || []);
+              }
+            };
+            window.addEventListener('message', h);
+            window.postMessage({ type: '__JWL_CART_DATA_REQUEST__' }, '*');
+            setTimeout(() => { window.removeEventListener('message', h); resolve([]); }, 1000);
+          });
+          // Can't await in sync, use callback approach
+          // Actually executeScript supports async, so let's return a promise
+          return p.then(entries => {
+            diag.interceptor.available = entries.length > 0;
+            for (const entry of entries) {
+              const summary = { endpoint: entry.endpoint };
+              // Map the structure: show keys at each level, and for arrays, show first item's keys
+              function mapStructure(obj, depth) {
+                if (!obj || depth > 4) return typeof obj;
+                if (Array.isArray(obj)) {
+                  return { _type: 'array', _length: obj.length, _firstItemKeys: obj[0] ? Object.keys(obj[0]).slice(0, 30) : [] };
+                }
+                if (typeof obj === 'object') {
+                  const result = {};
+                  for (const [k, v] of Object.entries(obj).slice(0, 20)) {
+                    result[k] = mapStructure(v, depth + 1);
+                  }
+                  return result;
+                }
+                return typeof obj;
+              }
+              summary.structure = mapStructure(entry.data, 0);
+
+              // Find any array with goods_id items and show a SAMPLE item
+              function findSampleItem(obj, depth) {
+                if (!obj || depth > 5) return null;
+                if (Array.isArray(obj)) {
+                  const item = obj.find(i => i?.goods_id || i?.goodsId);
+                  if (item) {
+                    // Return keys and sample values (truncated)
+                    const sample = {};
+                    for (const [k, v] of Object.entries(item)) {
+                      if (typeof v === 'string') sample[k] = v.substring(0, 80);
+                      else if (typeof v === 'number' || typeof v === 'boolean') sample[k] = v;
+                      else if (Array.isArray(v)) sample[k] = `[array: ${v.length}]`;
+                      else if (v && typeof v === 'object') sample[k] = `{${Object.keys(v).slice(0, 5).join(',')}}`;
+                      else sample[k] = String(v);
+                    }
+                    return sample;
+                  }
+                }
+                if (typeof obj === 'object' && !Array.isArray(obj)) {
+                  for (const v of Object.values(obj)) {
+                    const found = findSampleItem(v, depth + 1);
+                    if (found) return found;
+                  }
+                }
+                return null;
+              }
+              summary.sampleItem = findSampleItem(entry.data, 0);
+              diag.interceptor.entries.push(summary);
+            }
+
+            // 2. Check window state locations
+            diag.windowState = {};
+            const locations = [
+              '__INITIAL_STATE__', '__NEXT_DATA__', '__NUXT__',
+              'cartData', 'pageData', '__APP_DATA__', '__SSR_DATA__',
+            ];
+            for (const loc of locations) {
+              try {
+                const val = window[loc];
+                if (val) {
+                  diag.windowState[loc] = Object.keys(val).slice(0, 15);
+                }
+              } catch (e) {}
+            }
+
+            // 3. DOM stats
+            diag.dom = {};
+            diag.dom.productLinks = {
+              'goods_id': document.querySelectorAll('a[href*="goods_id="]').length,
+              '_p_': document.querySelectorAll('a[href*="_p_"]').length,
+              '/product/': document.querySelectorAll('a[href*="/product/"]').length,
+              'subject_id': document.querySelectorAll('a[href*="subject_id="]').length,
+            };
+            diag.dom.priceElements = document.querySelectorAll('[class*="price"], [class*="Price"]').length;
+            diag.dom.images = document.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"]').length;
+            diag.dom.scriptTags = document.querySelectorAll('script:not([src])').length;
+
+            // 4. Check for cart-related script content
+            const scripts = document.querySelectorAll('script:not([src])');
+            let cartScriptFound = false;
+            for (const s of scripts) {
+              if (s.textContent?.includes('goods_id') || s.textContent?.includes('goodsId')) {
+                cartScriptFound = true;
+                break;
+              }
+            }
+            diag.dom.hasCartDataInScripts = cartScriptFound;
+
+            return diag;
+          });
+        } catch (e) {
+          diag.interceptor.error = e.message;
+          return diag;
+        }
+      },
+    });
+
+    const diag = results[0]?.result;
+    if (diag) {
+      diagResult.innerHTML = `<strong>Diagnostic Report</strong> (copy all below):<br><pre style="white-space:pre-wrap;font-size:9px;">${JSON.stringify(diag, null, 2)}</pre>`;
+    } else {
+      diagResult.textContent = 'No diagnostic data returned. Make sure you are on a Temu page.';
+    }
+  } catch (err) {
+    diagResult.textContent = 'Error: ' + err.message;
+  }
+});
+
 // Initialize
 init();
