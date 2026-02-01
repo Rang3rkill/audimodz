@@ -15,12 +15,19 @@
 
 // Copy of pickBestPrice from popup.js for isolated testing
 function pickBestPrice(obj) {
+  const pi = obj.price_info || obj.priceInfo || {};
+  const ps = pi.price_schema || pi.priceSchema || {};
   const candidates = [
     obj.sale_price, obj.salePrice, obj.salePriceCent,
+    pi.sale_price, pi.salePrice, ps.sale_price, ps.salePrice,
     obj.promo_price, obj.promoPrice,
+    pi.promo_price, pi.promoPrice, ps.promo_price, ps.promoPrice,
     obj.discount_price, obj.discountPrice,
+    pi.discount_price, pi.discountPrice, ps.discount_price, ps.discountPrice,
     obj.current_price, obj.currentPrice,
+    pi.current_price, pi.currentPrice,
     obj.price, obj.priceCent,
+    pi.price, pi.priceCent, ps.price, ps.priceCent,
   ];
   let best = null;
   let original = null;
@@ -183,6 +190,49 @@ console.log('\n=== Realistic Temu cart API response objects ===');
   const r = pickBestPrice(temuItem);
   assertApprox(r.salePrice, 8.99, 'Promo cents: $8.99');
   assertApprox(r.originalPrice, 24.99, 'Original cents: $24.99');
+})();
+
+console.log('\n=== Nested price_info (Temu cart API /api/poppy/v1/shopping_cart) ===');
+
+(function testPriceInPriceInfo() {
+  // Real structure from Temu cart API - prices nested in price_info
+  const item = {
+    goods_id: 605986278458211,
+    title: 'Shapewear Bra',
+    thumb_url: 'https://img.kwcdn.com/product/fancy/abc.jpg',
+    price_info: { price: 6.35, currency_str: '$', split_price_text: '$6.35' },
+  };
+  const r = pickBestPrice(item);
+  assertApprox(r.salePrice, 6.35, 'price_info.price extracted');
+})();
+
+(function testPriceInfoWithSalePrice() {
+  const item = {
+    goods_id: 123,
+    price_info: { sale_price: 4.99, price: 12.99 },
+  };
+  const r = pickBestPrice(item);
+  assertApprox(r.salePrice, 4.99, 'price_info.sale_price preferred over price_info.price');
+  assertApprox(r.originalPrice, 12.99, 'price_info.price as original');
+})();
+
+(function testPriceInfoWithPriceSchema() {
+  const item = {
+    goods_id: 456,
+    price_info: { price_schema: { sale_price: 299, price: 599 } },
+  };
+  const r = pickBestPrice(item);
+  assertApprox(r.salePrice, 2.99, 'price_schema.sale_price cents -> $2.99');
+  assertApprox(r.originalPrice, 5.99, 'price_schema.price cents -> $5.99');
+})();
+
+(function testPriceInfoCents() {
+  const item = {
+    goods_id: 789,
+    price_info: { price: 1299 },
+  };
+  const r = pickBestPrice(item);
+  assertApprox(r.salePrice, 12.99, 'price_info.price 1299 cents -> $12.99');
 })();
 
 // ========== RESULTS ==========

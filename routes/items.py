@@ -1018,6 +1018,12 @@ def refresh_pictures():
             skipped += 1
             continue
 
+        # Cap server-side scrapes per batch to avoid long-running requests
+        # (each scrape can take 15s+ with retries if Temu rate-limits)
+        if (failed + refreshed) >= 5:
+            skipped += 1
+            continue
+
         try:
             if 'temu' in store.lower() or 'temu.com' in product_url:
                 scraped = scrape_temu_product(product_url)
