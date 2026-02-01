@@ -375,6 +375,8 @@ function pickBestPrice(obj) {
   const ps = pi.price_schema || pi.priceSchema || {};
   // Try sale/discount price fields first (the actual price to pay)
   const candidates = [
+    pi.price, pi.sale_price, pi.salePrice,
+    pi.promo_price, pi.discount_price,
     obj.sale_price, obj.salePrice, obj.salePriceCent,
     pi.sale_price, pi.salePrice, ps.sale_price, ps.salePrice,
     obj.promo_price, obj.promoPrice,
@@ -386,16 +388,32 @@ function pickBestPrice(obj) {
     obj.price, obj.priceCent,
     pi.price, pi.priceCent, ps.price, ps.priceCent,
   ];
+  // Original/market price candidates
+  const originalCandidates = [
+    pi.market_price, pi.marketPrice, pi.market_price_str,
+    pi.original_price, pi.originalPrice,
+    obj.market_price, obj.marketPrice,
+    obj.original_price, obj.originalPrice,
+  ];
+
   let best = null;
-  let original = null;
   for (const v of candidates) {
     const n = parseFloat(v);
-    if (!isNaN(n) && n > 0) {
-      if (best === null) best = n;
-      // Keep going to find the highest as original_price
-      if (original === null || n > original) original = n;
+    if (!isNaN(n) && n > 0) { best = n; break; }
+  }
+  let original = null;
+  for (const v of originalCandidates) {
+    const n = parseFloat(v);
+    if (!isNaN(n) && n > 0) { original = n; break; }
+  }
+  // Fall back: if no explicit original, use highest from all candidates
+  if (original === null) {
+    for (const v of [...candidates, ...originalCandidates]) {
+      const n = parseFloat(v);
+      if (!isNaN(n) && n > 0 && (original === null || n > original)) original = n;
     }
   }
+
   // Normalize cents (Temu sometimes returns 1299 meaning $12.99)
   if (best !== null && best > 100 && Number.isInteger(best)) best = best / 100;
   if (original !== null && original > 100 && Number.isInteger(original)) original = original / 100;
@@ -480,17 +498,30 @@ async function scrapeTemuAllTabs() {
           const image = imageCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           const { salePrice, originalPrice } = pickBestPrice(item);
 
-          let productUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
-          if (image) productUrl += '&thumb_url=' + encodeURIComponent(image);
+          // Build product URL, prefer seo_link_url if available
+          let productUrl = item.seo_link_url
+            ? `https://www.temu.com${item.seo_link_url}`
+            : `https://www.temu.com/goods.html?goods_id=${productId}`;
+          if (image) productUrl += (productUrl.includes('?') ? '&' : '?') + 'thumb_url=' + encodeURIComponent(image);
+
+          // Quantity: check skc_list[0].quantity, then direct fields
+          let qty = 1;
+          const skcList = item.skc_list || item.skcList;
+          if (Array.isArray(skcList) && skcList.length > 0) {
+            qty = parseInt(skcList[0].quantity || skcList[0].qty) || 1;
+          }
+          if (qty <= 1) {
+            qty = Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1);
+          }
 
           allItems.set(productId, {
             product_id: productId,
             product_url: productUrl,
-            title: item.goods_name || item.goodsName || item.title || item.name || 'Unknown',
+            title: item.goods_name || item.goodsName || item.title || item.page_alt || item.name || 'Unknown',
             image_url: image,
             price: salePrice,
             original_price: originalPrice,
-            quantity: Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1),
+            quantity: qty,
           });
         }
       }

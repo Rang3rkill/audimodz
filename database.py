@@ -85,6 +85,12 @@ def init_db():
         )
     ''')
 
+    # Add last_checked column if it doesn't exist (migration)
+    try:
+        cursor.execute('ALTER TABLE items ADD COLUMN last_checked DATETIME')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Add notes column if it doesn't exist (migration)
     try:
         cursor.execute('ALTER TABLE items ADD COLUMN notes TEXT')
