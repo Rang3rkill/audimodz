@@ -1298,7 +1298,7 @@ def patch_item(item_id):
 
     if 'image_url' in data:
         new_img = data['image_url']
-        if isinstance(new_img, str) and new_img.startswith('http'):
+        if isinstance(new_img, str) and new_img.startswith('http') and is_valid_product_image(new_img):
             updates['image_url'] = new_img
             # Also embed thumb_url in product_url for future recovery
             current_url = item.get('product_url', '')

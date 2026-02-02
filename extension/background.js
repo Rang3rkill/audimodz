@@ -132,15 +132,21 @@ async function fixMissingImages() {
       try {
         const imageUrl = await scrapeImageFromProductPage(item.product_url);
 
-        if (imageUrl) {
-          // Send to server
+        if (imageUrl && imageUrl !== item.current_image) {
+          // Send to server (server also validates against placeholder patterns)
           const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image_url: imageUrl }),
           });
           if (updateResp.ok) {
-            fixImagesStatus.updated++;
+            const result = await updateResp.json();
+            // Server may reject if it detected a placeholder - check if image actually changed
+            if (result.item && result.item.image_url === imageUrl) {
+              fixImagesStatus.updated++;
+            } else {
+              fixImagesStatus.failed++;
+            }
           } else {
             fixImagesStatus.failed++;
           }
