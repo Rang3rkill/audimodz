@@ -1023,12 +1023,27 @@ def _do_refresh_all(item_ids=None, force_images=False):
             updates = {'last_checked': datetime.now().isoformat()}
             updated_fields = []
 
-            # Image: update if scraped image is valid AND (missing, bad, or force)
+            # Image: try scraped image, then embedded thumb_url from product URL
+            best_img = None
             if scraped.get('image_url') and is_valid_product_image(scraped['image_url']):
+                best_img = scraped['image_url']
+            if not best_img and 'thumb_url=' in product_url:
+                from urllib.parse import urlparse, parse_qs, unquote
+                try:
+                    parsed = urlparse(product_url)
+                    params = parse_qs(parsed.query)
+                    if 'thumb_url' in params:
+                        embedded = unquote(params['thumb_url'][0])
+                        if embedded and is_valid_product_image(embedded):
+                            best_img = embedded
+                except Exception:
+                    pass
+
+            if best_img:
                 current_img = item.get('image_url')
-                if not current_img or force_images or not has_valid_image(item):
-                    if scraped['image_url'] != current_img:
-                        updates['image_url'] = scraped['image_url']
+                if best_img != current_img:
+                    if not current_img or force_images or not is_valid_product_image(current_img):
+                        updates['image_url'] = best_img
                         updated_fields.append('image')
 
             # Price: always update if different
