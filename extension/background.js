@@ -113,21 +113,23 @@ async function fixMissingImages() {
   fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, autoFixed: 0, current: '' };
 
   try {
-    // 1. Ask server which items need images (server auto-fixes items with embedded thumb_urls)
-    const resp = await fetch(`${API_BASE}/api/items/needs-images`);
-    if (!resp.ok) throw new Error('Failed to get items needing images');
-    const { items, auto_fixed } = await resp.json();
+    // Get ALL items from the server — we'll scrape every single one
+    const resp = await fetch(`${API_BASE}/api/items`);
+    if (!resp.ok) throw new Error('Failed to get items');
+    const allItems = await resp.json();
 
-    fixImagesStatus.autoFixed = auto_fixed || 0;
+    // Filter to items with product URLs (temu only for now)
+    const items = allItems.filter(i => i.product_url && i.product_url.includes('temu.com'));
+
     fixImagesStatus.total = items.length;
     if (items.length === 0) {
       fixImagesRunning = false;
       return fixImagesStatus;
     }
 
-    // 2. Phase 1: Try server-side API scraping first (fast, no browser tab needed).
-    //    The server hits Temu's API with goods_id which is far more reliable than
-    //    opening product pages in background tabs (Temu blocks/CAPTCHAs those).
+    // Phase 1: Try server-side API scraping first (fast, no browser tab needed).
+    // The server hits Temu's API with goods_id which is far more reliable than
+    // opening product pages in background tabs (Temu blocks/CAPTCHAs those).
     const remainingItems = [];
     for (const item of items) {
       fixImagesStatus.current = (item.title || '').substring(0, 50) + ' (server)';
@@ -140,10 +142,10 @@ async function fixMissingImages() {
           const result = await refreshResp.json();
           const newImg = result.item?.image_url;
           // Check if server actually got a new valid image
-          if (newImg && newImg !== item.current_image) {
+          if (newImg && newImg !== item.image_url) {
             fixImagesStatus.updated++;
           } else {
-            // Server couldn't fix it either - queue for browser tab scraping
+            // Server couldn't fix it — queue for browser tab scraping
             remainingItems.push(item);
           }
         } else {
@@ -158,19 +160,17 @@ async function fixMissingImages() {
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    // 3. Phase 2: For items the server couldn't fix, try opening browser tabs.
-    //    This uses the logged-in session which may bypass some blocks.
+    // Phase 2: For items the server couldn't fix, try opening browser tabs.
+    // This uses the logged-in session which may bypass some blocks.
     if (remainingItems.length > 0) {
       console.log(`[Judi's Wishlist] Phase 2: ${remainingItems.length} items need browser scraping`);
-      // Reset total to only remaining items for progress clarity
-      fixImagesStatus.total = items.length; // keep original total for accurate %
       for (const item of remainingItems) {
         fixImagesStatus.current = (item.title || '').substring(0, 50) + ' (browser)';
 
         try {
           const imageUrl = await scrapeImageFromProductPage(item.product_url);
 
-          if (imageUrl && imageUrl !== item.current_image) {
+          if (imageUrl && imageUrl !== item.image_url) {
             const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
