@@ -1229,6 +1229,71 @@ def refresh_pictures():
     })
 
 
+@items_bp.route('/needs-images', methods=['GET'])
+def needs_images():
+    """Return items that need images (missing or bad placeholder images).
+    Used by the extension's background tab-scraper to know which product pages to visit."""
+    items = Item.get_all()
+
+    # Count image usage for duplicate detection
+    image_counts = {}
+    for item in items:
+        url = item.get('image_url', '')
+        if url:
+            image_counts[url] = image_counts.get(url, 0) + 1
+
+    needs = []
+    for item in items:
+        if not item.get('product_url'):
+            continue
+        image_url = item.get('image_url', '')
+        needs_image = False
+        if not image_url:
+            needs_image = True
+        elif not is_valid_product_image(image_url):
+            needs_image = True
+        elif image_counts.get(image_url, 0) >= 3:
+            needs_image = True  # Shared by 3+ items = generic placeholder
+
+        if needs_image:
+            needs.append({
+                'id': item['id'],
+                'product_url': item['product_url'],
+                'title': item.get('title', ''),
+                'current_image': image_url,
+            })
+
+    return jsonify({ 'items': needs, 'count': len(needs) })
+
+
+@items_bp.route('/<int:item_id>', methods=['PATCH'])
+def patch_item(item_id):
+    """Update specific fields on an item (used by extension to push scraped images)."""
+    item = Item.get_by_id(item_id)
+    if not item:
+        return jsonify({'error': 'Item not found'}), 404
+
+    data = request.get_json() or {}
+    updates = {}
+
+    if 'image_url' in data:
+        new_img = data['image_url']
+        if isinstance(new_img, str) and new_img.startswith('http'):
+            updates['image_url'] = new_img
+
+    if 'title' in data and data['title']:
+        updates['title'] = data['title']
+
+    if 'current_price' in data and data['current_price'] is not None:
+        updates['current_price'] = float(data['current_price'])
+
+    if not updates:
+        return jsonify({'error': 'No valid fields to update'}), 400
+
+    updated = Item.update(item_id, **updates)
+    return jsonify({'success': True, 'item': updated})
+
+
 @items_bp.route('/bad-images', methods=['GET'])
 def list_bad_images():
     """List all items with bad/suspect images for manual review."""
