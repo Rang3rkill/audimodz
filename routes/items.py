@@ -1232,7 +1232,10 @@ def refresh_pictures():
 @items_bp.route('/needs-images', methods=['GET'])
 def needs_images():
     """Return items that need images (missing or bad placeholder images).
-    Used by the extension's background tab-scraper to know which product pages to visit."""
+    Used by the extension's background tab-scraper to know which product pages to visit.
+    Auto-fixes items that have a thumb_url embedded in their product_url before returning."""
+    from urllib.parse import urlparse, parse_qs, unquote
+
     items = Item.get_all()
 
     # Count image usage for duplicate detection
@@ -1243,6 +1246,7 @@ def needs_images():
             image_counts[url] = image_counts.get(url, 0) + 1
 
     needs = []
+    auto_fixed = 0
     for item in items:
         if not item.get('product_url'):
             continue
@@ -1256,6 +1260,22 @@ def needs_images():
             needs_image = True  # Shared by 3+ items = generic placeholder
 
         if needs_image:
+            # Try to auto-fix using embedded thumb_url before sending to extension
+            product_url = item.get('product_url', '')
+            if 'thumb_url=' in product_url:
+                try:
+                    parsed = urlparse(product_url)
+                    params = parse_qs(parsed.query)
+                    if 'thumb_url' in params:
+                        embedded = unquote(params['thumb_url'][0])
+                        if embedded.startswith('http') and is_valid_product_image(embedded):
+                            # Auto-fix: update the item's image directly
+                            Item.update(item['id'], image_url=embedded)
+                            auto_fixed += 1
+                            continue
+                except Exception:
+                    pass
+
             needs.append({
                 'id': item['id'],
                 'product_url': item['product_url'],
@@ -1263,7 +1283,7 @@ def needs_images():
                 'current_image': image_url,
             })
 
-    return jsonify({ 'items': needs, 'count': len(needs) })
+    return jsonify({ 'items': needs, 'count': len(needs), 'auto_fixed': auto_fixed })
 
 
 @items_bp.route('/<int:item_id>', methods=['PATCH'])
@@ -1278,8 +1298,12 @@ def patch_item(item_id):
 
     if 'image_url' in data:
         new_img = data['image_url']
-        if isinstance(new_img, str) and new_img.startswith('http'):
+        if isinstance(new_img, str) and new_img.startswith('http') and is_valid_product_image(new_img):
             updates['image_url'] = new_img
+            # Also embed thumb_url in product_url for future recovery
+            current_url = item.get('product_url', '')
+            if current_url and 'thumb_url=' not in current_url:
+                updates['product_url'] = ensure_thumb_url(current_url, new_img)
 
     if 'title' in data and data['title']:
         updates['title'] = data['title']
