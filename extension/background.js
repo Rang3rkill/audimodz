@@ -113,10 +113,13 @@ async function fixMissingImages() {
   fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
 
   try {
-    // 1. Ask server which items need images
-    const resp = await fetch(`${API_BASE}/api/items/needs-images`);
-    if (!resp.ok) throw new Error('Failed to get items needing images');
-    const { items } = await resp.json();
+    // Get ALL items from the server — we'll scrape every single one
+    const resp = await fetch(`${API_BASE}/api/items`);
+    if (!resp.ok) throw new Error('Failed to get items');
+    const allItems = await resp.json();
+
+    // Filter to items with product URLs (temu only for now)
+    const items = allItems.filter(i => i.product_url && i.product_url.includes('temu.com'));
 
     fixImagesStatus.total = items.length;
     if (items.length === 0) {
@@ -124,7 +127,7 @@ async function fixMissingImages() {
       return fixImagesStatus;
     }
 
-    // 2. Process each item: open tab, scrape image, update server
+    // Process each item: open tab, scrape image, update server
     for (const item of items) {
       fixImagesStatus.current = (item.title || '').substring(0, 50);
 
@@ -132,17 +135,20 @@ async function fixMissingImages() {
         const imageUrl = await scrapeImageFromProductPage(item.product_url);
 
         if (imageUrl) {
-          // Send to server
-          const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_url: imageUrl }),
-          });
-          if (updateResp.ok) {
-            fixImagesStatus.updated++;
-          } else {
-            fixImagesStatus.failed++;
+          // Only update if different from current
+          if (imageUrl !== item.image_url) {
+            const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image_url: imageUrl }),
+            });
+            if (updateResp.ok) {
+              fixImagesStatus.updated++;
+            } else {
+              fixImagesStatus.failed++;
+            }
           }
+          // Same image = skip, not a failure
         } else {
           fixImagesStatus.failed++;
         }
@@ -153,7 +159,7 @@ async function fixMissingImages() {
 
       fixImagesStatus.processed++;
 
-      // Small delay between items to be nice
+      // Small delay between items
       await new Promise(r => setTimeout(r, 500));
     }
   } catch (e) {
