@@ -2522,6 +2522,34 @@ form {
     margin-right: 8px;
 }
 
+.refresh-progress {
+    margin-top: 10px;
+}
+
+.refresh-progress.hidden {
+    display: none;
+}
+
+.progress-bar-container {
+    background: #e0e0e0;
+    border-radius: 6px;
+    height: 20px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    background: #4a90d9;
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.5s ease;
+}
+
+.progress-text {
+    font-size: 12px;
+    color: #666;
+    margin-top: 4px;
+}
+
 /* Activity rows */
 .activity-info {
     display: flex;

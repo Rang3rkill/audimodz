@@ -17,6 +17,8 @@ BAD_IMAGE_PATTERNS = [
     '/bg/', '/background/', 'placeholder',
     'upload_aimg',  # Temu advertising/marketing images, not product photos
     '/aimg/',        # Advertising image CDN path
+    '/splash/',      # Splash/landing page images
+    '/event/',       # Event promo images
 ]
 
 
@@ -958,6 +960,145 @@ def refresh_missing_data():
         'remaining': total_missing - len(missing_items),
         'results': results
     })
+
+
+# Background refresh state
+_refresh_all_status = {
+    'running': False,
+    'total': 0,
+    'processed': 0,
+    'updated': 0,
+    'failed': 0,
+    'skipped': 0,
+    'current_item': '',
+    'results': [],
+}
+
+
+def _do_refresh_all(item_ids=None, force_images=False):
+    """Background worker: scrape every item's product URL and update data."""
+    global _refresh_all_status
+    try:
+        items = Item.get_all()
+        targets = [i for i in items if i.get('product_url')]
+        if item_ids:
+            id_set = set(item_ids)
+            targets = [i for i in targets if i['id'] in id_set]
+
+        _refresh_all_status['total'] = len(targets)
+        _refresh_all_status['processed'] = 0
+        _refresh_all_status['updated'] = 0
+        _refresh_all_status['failed'] = 0
+        _refresh_all_status['skipped'] = 0
+        _refresh_all_status['results'] = []
+
+        for item in targets:
+            _refresh_all_status['current_item'] = item.get('title', '')[:60]
+            product_url = item.get('product_url', '')
+            store = item.get('store', '')
+
+            if not ('temu' in store.lower() or 'temu.com' in product_url):
+                _refresh_all_status['skipped'] += 1
+                _refresh_all_status['processed'] += 1
+                continue
+
+            try:
+                scraped = scrape_temu_product(product_url)
+            except Exception as e:
+                _refresh_all_status['failed'] += 1
+                _refresh_all_status['processed'] += 1
+                _refresh_all_status['results'].append({
+                    'id': item['id'], 'status': 'error', 'error': str(e)[:100]
+                })
+                continue
+
+            if not scraped:
+                _refresh_all_status['failed'] += 1
+                _refresh_all_status['processed'] += 1
+                _refresh_all_status['results'].append({
+                    'id': item['id'], 'status': 'no_data'
+                })
+                continue
+
+            updates = {'last_checked': datetime.now().isoformat()}
+            updated_fields = []
+
+            # Image: update if scraped image is valid AND (missing, bad, or force)
+            if scraped.get('image_url') and is_valid_product_image(scraped['image_url']):
+                current_img = item.get('image_url')
+                if not current_img or force_images or not has_valid_image(item):
+                    if scraped['image_url'] != current_img:
+                        updates['image_url'] = scraped['image_url']
+                        updated_fields.append('image')
+
+            # Price: always update if different
+            if scraped.get('price') is not None:
+                old_price = item.get('current_price')
+                new_price = scraped['price']
+                if old_price is None:
+                    updates['current_price'] = new_price
+                    if item.get('original_price') is None:
+                        updates['original_price'] = new_price
+                    updated_fields.append('price')
+                elif abs(old_price - new_price) > 0.001:
+                    updates['last_price'] = old_price
+                    updates['current_price'] = new_price
+                    updates['price_updated_at'] = datetime.now().isoformat()
+                    updated_fields.append('price')
+
+            # Title: update if missing or placeholder
+            if scraped.get('title'):
+                cur_title = item.get('title', '')
+                if not cur_title or cur_title in ['Unknown Product', 'Unknown', '']:
+                    updates['title'] = scraped['title']
+                    updated_fields.append('title')
+
+            # Original price
+            if scraped.get('original_price') and item.get('original_price') is None:
+                updates['original_price'] = scraped['original_price']
+                updated_fields.append('original_price')
+
+            Item.update(item['id'], **updates)
+
+            if updated_fields:
+                _refresh_all_status['updated'] += 1
+                _refresh_all_status['results'].append({
+                    'id': item['id'], 'status': 'updated', 'fields': updated_fields
+                })
+            else:
+                _refresh_all_status['results'].append({
+                    'id': item['id'], 'status': 'no_changes'
+                })
+
+            _refresh_all_status['processed'] += 1
+
+    finally:
+        _refresh_all_status['running'] = False
+        _refresh_all_status['current_item'] = ''
+
+
+@items_bp.route('/refresh-all', methods=['POST'])
+def refresh_all():
+    """Start a background refresh of ALL items by scraping each product URL."""
+    global _refresh_all_status
+    if _refresh_all_status['running']:
+        return jsonify({'error': 'Refresh already in progress', 'status': _refresh_all_status}), 409
+
+    data = request.get_json() or {}
+    item_ids = data.get('item_ids', None)
+    force_images = data.get('force_images', False)
+
+    _refresh_all_status['running'] = True
+    thread = threading.Thread(target=_do_refresh_all, args=(item_ids, force_images), daemon=True)
+    thread.start()
+
+    return jsonify({'success': True, 'message': 'Refresh started in background'})
+
+
+@items_bp.route('/refresh-all/status', methods=['GET'])
+def refresh_all_status():
+    """Get the current status of a background refresh-all operation."""
+    return jsonify(_refresh_all_status)
 
 
 @items_bp.route('/refresh-pictures', methods=['POST'])

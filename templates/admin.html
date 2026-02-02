@@ -71,6 +71,15 @@
                 <button id="adminRefreshPrices" class="btn btn-secondary btn-block">
                     <span>&#8635;</span> Refresh All Prices
                 </button>
+                <button id="adminRefreshAll" class="btn btn-primary btn-block">
+                    <span>&#127760;</span> Refresh All Data (Scrape Every Item)
+                </button>
+                <div id="refreshAllProgress" class="refresh-progress hidden">
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="refreshAllBar" style="width: 0%"></div>
+                    </div>
+                    <div class="progress-text" id="refreshAllText">Starting...</div>
+                </div>
             </div>
         </div>
 
