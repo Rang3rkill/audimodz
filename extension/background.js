@@ -125,43 +125,78 @@ async function fixMissingImages() {
       return fixImagesStatus;
     }
 
-    // 2. Process each item: open tab, scrape image, update server
+    // 2. Phase 1: Try server-side API scraping first (fast, no browser tab needed).
+    //    The server hits Temu's API with goods_id which is far more reliable than
+    //    opening product pages in background tabs (Temu blocks/CAPTCHAs those).
+    const remainingItems = [];
     for (const item of items) {
-      fixImagesStatus.current = (item.title || '').substring(0, 50);
+      fixImagesStatus.current = (item.title || '').substring(0, 50) + ' (server)';
 
       try {
-        const imageUrl = await scrapeImageFromProductPage(item.product_url);
+        const refreshResp = await fetch(`${API_BASE}/api/items/${item.id}/refresh`, {
+          method: 'POST',
+        });
+        if (refreshResp.ok) {
+          const result = await refreshResp.json();
+          const newImg = result.item?.image_url;
+          // Check if server actually got a new valid image
+          if (newImg && newImg !== item.current_image) {
+            fixImagesStatus.updated++;
+          } else {
+            // Server couldn't fix it either - queue for browser tab scraping
+            remainingItems.push(item);
+          }
+        } else {
+          remainingItems.push(item);
+        }
+      } catch (e) {
+        remainingItems.push(item);
+      }
 
-        if (imageUrl && imageUrl !== item.current_image) {
-          // Send to server (server also validates against placeholder patterns)
-          const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image_url: imageUrl }),
-          });
-          if (updateResp.ok) {
-            const result = await updateResp.json();
-            // Server may reject if it detected a placeholder - check if image actually changed
-            if (result.item && result.item.image_url === imageUrl) {
-              fixImagesStatus.updated++;
+      fixImagesStatus.processed++;
+      // Small delay to avoid hammering Temu's API
+      await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // 3. Phase 2: For items the server couldn't fix, try opening browser tabs.
+    //    This uses the logged-in session which may bypass some blocks.
+    if (remainingItems.length > 0) {
+      console.log(`[Judi's Wishlist] Phase 2: ${remainingItems.length} items need browser scraping`);
+      // Reset total to only remaining items for progress clarity
+      fixImagesStatus.total = items.length; // keep original total for accurate %
+      for (const item of remainingItems) {
+        fixImagesStatus.current = (item.title || '').substring(0, 50) + ' (browser)';
+
+        try {
+          const imageUrl = await scrapeImageFromProductPage(item.product_url);
+
+          if (imageUrl && imageUrl !== item.current_image) {
+            const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ image_url: imageUrl }),
+            });
+            if (updateResp.ok) {
+              const result = await updateResp.json();
+              if (result.item && result.item.image_url === imageUrl) {
+                fixImagesStatus.updated++;
+              } else {
+                fixImagesStatus.failed++;
+              }
             } else {
               fixImagesStatus.failed++;
             }
           } else {
             fixImagesStatus.failed++;
           }
-        } else {
+        } catch (e) {
+          console.log(`[Judi's Wishlist] Failed to scrape image for item ${item.id}: ${e.message}`);
           fixImagesStatus.failed++;
         }
-      } catch (e) {
-        console.log(`[Judi's Wishlist] Failed to scrape image for item ${item.id}: ${e.message}`);
-        fixImagesStatus.failed++;
+
+        fixImagesStatus.processed++;
+        await new Promise(r => setTimeout(r, 500));
       }
-
-      fixImagesStatus.processed++;
-
-      // Small delay between items to be nice
-      await new Promise(r => setTimeout(r, 500));
     }
   } catch (e) {
     console.error('[Judi\'s Wishlist] Fix images error:', e);
