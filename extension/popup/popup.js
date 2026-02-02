@@ -24,6 +24,8 @@ const elements = {
   importBtn: document.getElementById('importBtn'),
   result: document.getElementById('result'),
   refreshImagesBtn: document.getElementById('refreshImagesBtn'),
+  fixImagesBtn: document.getElementById('fixImagesBtn'),
+  fixImagesStatus: document.getElementById('fixImagesStatus'),
   refreshResult: document.getElementById('refreshResult'),
   // Share link section
   shareSection: document.getElementById('shareSection'),
@@ -1727,6 +1729,48 @@ elements.importBtn.addEventListener('click', importCart);
 elements.shareImportBtn.addEventListener('click', importFromShareLink);
 elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
 elements.refreshImagesBtn.addEventListener('click', refreshImages);
+elements.fixImagesBtn.addEventListener('click', fixMissingImages);
+
+async function fixMissingImages() {
+  elements.fixImagesBtn.disabled = true;
+  elements.fixImagesBtn.textContent = '🔧 Starting...';
+  elements.fixImagesStatus.classList.remove('hidden');
+  elements.fixImagesStatus.textContent = 'Checking which items need images...';
+
+  try {
+    // Tell background to start
+    chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START' });
+
+    // Poll for status
+    const poll = () => {
+      chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
+        if (!status) return;
+
+        const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+        elements.fixImagesStatus.textContent = `${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.current ? ' — ' + status.current : ''}`;
+        elements.fixImagesBtn.textContent = `🔧 ${pct}% (${status.processed}/${status.total})`;
+
+        if (status.running) {
+          setTimeout(poll, 2000);
+        } else {
+          elements.fixImagesBtn.disabled = false;
+          elements.fixImagesBtn.textContent = '🔧 Fix Missing Images (opens product pages)';
+          if (status.total === 0) {
+            elements.fixImagesStatus.textContent = 'All items already have valid images!';
+          } else {
+            elements.fixImagesStatus.textContent = `Done! Fixed ${status.updated} images, ${status.failed} failed out of ${status.total}`;
+          }
+        }
+      });
+    };
+
+    setTimeout(poll, 3000);
+  } catch (error) {
+    elements.fixImagesStatus.textContent = 'Error: ' + error.message;
+    elements.fixImagesBtn.disabled = false;
+    elements.fixImagesBtn.textContent = '🔧 Fix Missing Images (opens product pages)';
+  }
+}
 
 // Allow Enter key to trigger import
 elements.shareLink.addEventListener('keypress', (e) => {

@@ -1023,12 +1023,27 @@ def _do_refresh_all(item_ids=None, force_images=False):
             updates = {'last_checked': datetime.now().isoformat()}
             updated_fields = []
 
-            # Image: update if scraped image is valid AND (missing, bad, or force)
+            # Image: try scraped image, then embedded thumb_url from product URL
+            best_img = None
             if scraped.get('image_url') and is_valid_product_image(scraped['image_url']):
+                best_img = scraped['image_url']
+            if not best_img and 'thumb_url=' in product_url:
+                from urllib.parse import urlparse, parse_qs, unquote
+                try:
+                    parsed = urlparse(product_url)
+                    params = parse_qs(parsed.query)
+                    if 'thumb_url' in params:
+                        embedded = unquote(params['thumb_url'][0])
+                        if embedded and is_valid_product_image(embedded):
+                            best_img = embedded
+                except Exception:
+                    pass
+
+            if best_img:
                 current_img = item.get('image_url')
-                if not current_img or force_images or not has_valid_image(item):
-                    if scraped['image_url'] != current_img:
-                        updates['image_url'] = scraped['image_url']
+                if best_img != current_img:
+                    if not current_img or force_images or not is_valid_product_image(current_img):
+                        updates['image_url'] = best_img
                         updated_fields.append('image')
 
             # Price: always update if different
@@ -1212,6 +1227,71 @@ def refresh_pictures():
         'total': len(all_with_url),
         'bad_images_remaining': total_bad
     })
+
+
+@items_bp.route('/needs-images', methods=['GET'])
+def needs_images():
+    """Return items that need images (missing or bad placeholder images).
+    Used by the extension's background tab-scraper to know which product pages to visit."""
+    items = Item.get_all()
+
+    # Count image usage for duplicate detection
+    image_counts = {}
+    for item in items:
+        url = item.get('image_url', '')
+        if url:
+            image_counts[url] = image_counts.get(url, 0) + 1
+
+    needs = []
+    for item in items:
+        if not item.get('product_url'):
+            continue
+        image_url = item.get('image_url', '')
+        needs_image = False
+        if not image_url:
+            needs_image = True
+        elif not is_valid_product_image(image_url):
+            needs_image = True
+        elif image_counts.get(image_url, 0) >= 3:
+            needs_image = True  # Shared by 3+ items = generic placeholder
+
+        if needs_image:
+            needs.append({
+                'id': item['id'],
+                'product_url': item['product_url'],
+                'title': item.get('title', ''),
+                'current_image': image_url,
+            })
+
+    return jsonify({ 'items': needs, 'count': len(needs) })
+
+
+@items_bp.route('/<int:item_id>', methods=['PATCH'])
+def patch_item(item_id):
+    """Update specific fields on an item (used by extension to push scraped images)."""
+    item = Item.get_by_id(item_id)
+    if not item:
+        return jsonify({'error': 'Item not found'}), 404
+
+    data = request.get_json() or {}
+    updates = {}
+
+    if 'image_url' in data:
+        new_img = data['image_url']
+        if isinstance(new_img, str) and new_img.startswith('http'):
+            updates['image_url'] = new_img
+
+    if 'title' in data and data['title']:
+        updates['title'] = data['title']
+
+    if 'current_price' in data and data['current_price'] is not None:
+        updates['current_price'] = float(data['current_price'])
+
+    if not updates:
+        return jsonify({'error': 'No valid fields to update'}), 400
+
+    updated = Item.update(item_id, **updates)
+    return jsonify({'success': True, 'item': updated})
 
 
 @items_bp.route('/bad-images', methods=['GET'])

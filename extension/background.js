@@ -80,12 +80,171 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     capturedCartData.delete(message.tabId);
     return false;
   }
+
+  // Fix missing images - open each product page and grab real image
+  if (message.type === 'FIX_IMAGES_START') {
+    fixMissingImages()
+      .then(status => console.log('[Judi\'s Wishlist] Fix images done:', status))
+      .catch(e => console.error('[Judi\'s Wishlist] Fix images error:', e));
+    sendResponse({ success: true, message: 'Started' });
+    return false;
+  }
+
+  if (message.type === 'FIX_IMAGES_STATUS') {
+    sendResponse({ ...fixImagesStatus, running: fixImagesRunning });
+    return false;
+  }
 });
 
 // Clean up captured data when tabs are closed
 chrome.tabs.onRemoved.addListener((tabId) => {
   capturedCartData.delete(tabId);
 });
+
+// ============================================================
+// FIX IMAGES: Open each product page, grab real image, update DB
+// ============================================================
+let fixImagesRunning = false;
+let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
+
+async function fixMissingImages() {
+  if (fixImagesRunning) return fixImagesStatus;
+  fixImagesRunning = true;
+  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
+
+  try {
+    // 1. Ask server which items need images
+    const resp = await fetch(`${API_BASE}/api/items/needs-images`);
+    if (!resp.ok) throw new Error('Failed to get items needing images');
+    const { items } = await resp.json();
+
+    fixImagesStatus.total = items.length;
+    if (items.length === 0) {
+      fixImagesRunning = false;
+      return fixImagesStatus;
+    }
+
+    // 2. Process each item: open tab, scrape image, update server
+    for (const item of items) {
+      fixImagesStatus.current = (item.title || '').substring(0, 50);
+
+      try {
+        const imageUrl = await scrapeImageFromProductPage(item.product_url);
+
+        if (imageUrl) {
+          // Send to server
+          const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_url: imageUrl }),
+          });
+          if (updateResp.ok) {
+            fixImagesStatus.updated++;
+          } else {
+            fixImagesStatus.failed++;
+          }
+        } else {
+          fixImagesStatus.failed++;
+        }
+      } catch (e) {
+        console.log(`[Judi's Wishlist] Failed to scrape image for item ${item.id}: ${e.message}`);
+        fixImagesStatus.failed++;
+      }
+
+      fixImagesStatus.processed++;
+
+      // Small delay between items to be nice
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch (e) {
+    console.error('[Judi\'s Wishlist] Fix images error:', e);
+  } finally {
+    fixImagesRunning = false;
+    fixImagesStatus.current = '';
+  }
+
+  return fixImagesStatus;
+}
+
+async function scrapeImageFromProductPage(url) {
+  // Open the product page in a background tab
+  const tab = await chrome.tabs.create({ url, active: false });
+
+  try {
+    // Wait for the page to load
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Tab load timeout')), 20000);
+
+      function listener(tabId, changeInfo) {
+        if (tabId === tab.id && changeInfo.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          clearTimeout(timeout);
+          // Give JS a moment to render
+          setTimeout(resolve, 2000);
+        }
+      }
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+
+    // Execute script to grab the product image
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        // Try multiple sources for the product image
+        // 1. og:image meta tag (most reliable on product pages)
+        const ogImage = document.querySelector('meta[property="og:image"]');
+        if (ogImage?.content && ogImage.content.startsWith('http')) {
+          return ogImage.content;
+        }
+
+        // 2. Look for product image in JSON-LD
+        const jsonLd = document.querySelectorAll('script[type="application/ld+json"]');
+        for (const script of jsonLd) {
+          try {
+            const data = JSON.parse(script.textContent);
+            if (data.image) {
+              const img = Array.isArray(data.image) ? data.image[0] : data.image;
+              if (typeof img === 'string' && img.startsWith('http')) return img;
+              if (img?.url && img.url.startsWith('http')) return img.url;
+            }
+          } catch {}
+        }
+
+        // 3. Look for thumb_url in page scripts
+        const scripts = document.querySelectorAll('script:not([src])');
+        for (const script of scripts) {
+          const text = script.textContent;
+          const match = text.match(/"thumb_url"\s*:\s*"(https?:[^"]+)"/);
+          if (match) {
+            return match[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+          }
+        }
+
+        // 4. First large product image on the page
+        const imgs = document.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"]');
+        for (const img of imgs) {
+          if (img.naturalWidth > 100 && img.naturalHeight > 100 && img.src.startsWith('http')) {
+            return img.src;
+          }
+        }
+
+        // 5. Any img with product-like src
+        for (const img of imgs) {
+          if (img.src.startsWith('http') && img.src.includes('product')) {
+            return img.src;
+          }
+        }
+
+        return null;
+      },
+    });
+
+    return results[0]?.result || null;
+  } finally {
+    // Always close the tab
+    try { await chrome.tabs.remove(tab.id); } catch {}
+  }
+}
 
 // Import items to the wishlist app
 async function handleImport(data) {
