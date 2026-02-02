@@ -810,12 +810,17 @@ def refresh_item(item_id):
 
     # Update image if scraped and either missing or different
     if scraped.get('image_url'):
-        if not item.get('image_url'):
+        if not item.get('image_url') or not is_valid_product_image(item.get('image_url', '')):
             updates['image_url'] = scraped['image_url']
             updated_fields.append('image')
+            # Embed thumb_url in product_url for future recovery
+            if product_url and 'thumb_url=' not in product_url:
+                updates['product_url'] = ensure_thumb_url(product_url, scraped['image_url'])
         elif scraped['image_url'] != item.get('image_url'):
             updates['image_url'] = scraped['image_url']
             updated_fields.append('image')
+            if product_url and 'thumb_url=' not in product_url:
+                updates['product_url'] = ensure_thumb_url(product_url, scraped['image_url'])
 
     # Update price - always update if different, track price history
     if scraped.get('price') is not None:
