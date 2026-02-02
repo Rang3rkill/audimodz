@@ -33,6 +33,10 @@ const Admin = {
             refreshPictures: document.getElementById('adminRefreshPictures'),
             cleanBadImages: document.getElementById('adminCleanBadImages'),
             refreshPrices: document.getElementById('adminRefreshPrices'),
+            refreshAll: document.getElementById('adminRefreshAll'),
+            refreshAllProgress: document.getElementById('refreshAllProgress'),
+            refreshAllBar: document.getElementById('refreshAllBar'),
+            refreshAllText: document.getElementById('refreshAllText'),
             manageCategories: document.getElementById('adminManageCategories'),
             manageLists: document.getElementById('adminManageLists'),
             exportData: document.getElementById('adminExportData'),
@@ -69,6 +73,7 @@ const Admin = {
         this.elements.refreshPictures?.addEventListener('click', () => this.bulkRefreshPictures());
         this.elements.cleanBadImages?.addEventListener('click', () => this.cleanBadImages());
         this.elements.refreshPrices?.addEventListener('click', () => this.bulkRefreshPrices());
+        this.elements.refreshAll?.addEventListener('click', () => this.refreshAllData());
 
         // Manage
         this.elements.manageCategories?.addEventListener('click', () => this.showManageCategoriesModal());
@@ -573,6 +578,86 @@ const Admin = {
         } finally {
             btn.innerHTML = originalHtml;
             btn.disabled = false;
+        }
+    },
+
+    async refreshAllData() {
+        const btn = this.elements.refreshAll;
+        if (!btn) return;
+
+        const totalWithUrl = this.items.filter(i => i.product_url).length;
+        if (totalWithUrl === 0) {
+            this.showToast('No items with product URLs', 'warning');
+            return;
+        }
+
+        if (!confirm(`Refresh ALL ${totalWithUrl} items by scraping each product page?\n\nThis will take a while (~1 second per item) but runs in the background.\nYou can close this page and come back to check progress.\n\nContinue?`)) return;
+
+        const originalHtml = btn.innerHTML;
+        btn.disabled = true;
+
+        const progress = this.elements.refreshAllProgress;
+        const bar = this.elements.refreshAllBar;
+        const text = this.elements.refreshAllText;
+
+        try {
+            // Start the background refresh
+            const startResult = await this.api('/api/items/refresh-all', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ force_images: false }),
+            });
+
+            if (startResult.error) {
+                this.showToast(startResult.error, 'error');
+                return;
+            }
+
+            // Show progress bar
+            progress.classList.remove('hidden');
+
+            // Poll for status
+            const poll = async () => {
+                try {
+                    const status = await this.api('/api/items/refresh-all/status');
+                    const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+                    bar.style.width = `${pct}%`;
+                    text.textContent = `${status.processed}/${status.total} processed — ${status.updated} updated, ${status.failed} failed${status.current_item ? ' — ' + status.current_item : ''}`;
+
+                    if (status.running) {
+                        setTimeout(poll, 2000);
+                    } else {
+                        // Done
+                        btn.innerHTML = originalHtml;
+                        btn.disabled = false;
+                        bar.style.width = '100%';
+                        text.textContent = `Done! ${status.updated} updated, ${status.failed} failed out of ${status.total} items`;
+
+                        this.items = await this.api('/api/items');
+                        this.stats = await this.api('/api/items/stats');
+                        this.renderStats();
+
+                        if (status.updated > 0) {
+                            this.showToast(`Refreshed ${status.updated} items`, 'success');
+                        } else {
+                            this.showToast('All items already up to date', 'info');
+                        }
+
+                        setTimeout(() => progress.classList.add('hidden'), 10000);
+                    }
+                } catch (e) {
+                    text.textContent = `Error polling status: ${e.message}`;
+                    setTimeout(poll, 5000);
+                }
+            };
+
+            setTimeout(poll, 2000);
+
+        } catch (error) {
+            this.showToast(`Refresh error: ${error.message}`, 'error');
+            btn.innerHTML = originalHtml;
+            btn.disabled = false;
+            progress.classList.add('hidden');
         }
     },
 
