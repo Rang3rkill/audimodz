@@ -113,13 +113,42 @@ async function fixMissingImages() {
   fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, autoFixed: 0, current: '' };
 
   try {
-    // Get ALL items from the server — we'll scrape every single one
+    // Get ALL items from the server
     const resp = await fetch(`${API_BASE}/api/items`);
     if (!resp.ok) throw new Error('Failed to get items');
     const allItems = await resp.json();
 
-    // Filter to items with product URLs (temu only for now)
-    const items = allItems.filter(i => i.product_url && i.product_url.includes('temu.com'));
+    // Filter to Temu items with product URLs that need image fixes
+    // (missing image, or known bad placeholder patterns)
+    const BAD_IMG_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
+      'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
+      'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/'];
+
+    function needsImage(item) {
+      if (!item.product_url || !item.product_url.includes('temu.com')) return false;
+      const img = item.image_url || '';
+      if (!img) return true;
+      const lower = img.toLowerCase();
+      for (const p of BAD_IMG_PATTERNS) {
+        if (lower.includes(p)) return true;
+      }
+      return false;
+    }
+
+    const items = allItems.filter(needsImage);
+
+    // Also detect duplicate images (3+ items sharing same URL = placeholder)
+    const imgCounts = {};
+    for (const item of allItems) {
+      if (item.image_url) imgCounts[item.image_url] = (imgCounts[item.image_url] || 0) + 1;
+    }
+    for (const item of allItems) {
+      if (item.image_url && imgCounts[item.image_url] >= 3 && !items.find(i => i.id === item.id)) {
+        if (item.product_url && item.product_url.includes('temu.com')) {
+          items.push(item);
+        }
+      }
+    }
 
     fixImagesStatus.total = items.length;
     if (items.length === 0) {
@@ -127,76 +156,54 @@ async function fixMissingImages() {
       return fixImagesStatus;
     }
 
-    // Phase 1: Try server-side API scraping first (fast, no browser tab needed).
-    // The server hits Temu's API with goods_id which is far more reliable than
-    // opening product pages in background tabs (Temu blocks/CAPTCHAs those).
-    const remainingItems = [];
+    // Process each item: first check embedded thumb_url, then open browser tab
     for (const item of items) {
-      fixImagesStatus.current = (item.title || '').substring(0, 50) + ' (server)';
+      fixImagesStatus.current = (item.title || '').substring(0, 50);
 
       try {
-        const refreshResp = await fetch(`${API_BASE}/api/items/${item.id}/refresh`, {
-          method: 'POST',
-        });
-        if (refreshResp.ok) {
-          const result = await refreshResp.json();
-          const newImg = result.item?.image_url;
-          // Check if server actually got a new valid image
-          if (newImg && newImg !== item.image_url) {
-            fixImagesStatus.updated++;
-          } else {
-            // Server couldn't fix it — queue for browser tab scraping
-            remainingItems.push(item);
-          }
-        } else {
-          remainingItems.push(item);
-        }
-      } catch (e) {
-        remainingItems.push(item);
-      }
-
-      fixImagesStatus.processed++;
-      // Small delay to avoid hammering Temu's API
-      await new Promise(r => setTimeout(r, 1000));
-    }
-
-    // Phase 2: For items the server couldn't fix, try opening browser tabs.
-    // This uses the logged-in session which may bypass some blocks.
-    if (remainingItems.length > 0) {
-      console.log(`[Judi's Wishlist] Phase 2: ${remainingItems.length} items need browser scraping`);
-      for (const item of remainingItems) {
-        fixImagesStatus.current = (item.title || '').substring(0, 50) + ' (browser)';
-
-        try {
-          const imageUrl = await scrapeImageFromProductPage(item.product_url);
-
-          if (imageUrl && imageUrl !== item.image_url) {
-            const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ image_url: imageUrl }),
-            });
-            if (updateResp.ok) {
-              const result = await updateResp.json();
-              if (result.item && result.item.image_url === imageUrl) {
-                fixImagesStatus.updated++;
-              } else {
-                fixImagesStatus.failed++;
+        // Step 1: Check if product_url has an embedded thumb_url (instant, no network)
+        let imageUrl = null;
+        if (item.product_url.includes('thumb_url=')) {
+          try {
+            const urlObj = new URL(item.product_url);
+            const embedded = urlObj.searchParams.get('thumb_url');
+            if (embedded) {
+              const decoded = decodeURIComponent(embedded);
+              if (decoded.startsWith('http') && decoded !== item.image_url) {
+                imageUrl = decoded;
               }
-            } else {
-              fixImagesStatus.failed++;
             }
+          } catch {}
+        }
+
+        // Step 2: If no embedded thumb, open the product page in a browser tab
+        // Browser tabs use the logged-in session and can render Temu's JS
+        if (!imageUrl) {
+          imageUrl = await scrapeImageFromProductPage(item.product_url);
+        }
+
+        if (imageUrl && imageUrl !== item.image_url) {
+          const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image_url: imageUrl }),
+          });
+          if (updateResp.ok) {
+            fixImagesStatus.updated++;
           } else {
             fixImagesStatus.failed++;
           }
-        } catch (e) {
-          console.log(`[Judi's Wishlist] Failed to scrape image for item ${item.id}: ${e.message}`);
+        } else {
           fixImagesStatus.failed++;
         }
-
-        fixImagesStatus.processed++;
-        await new Promise(r => setTimeout(r, 500));
+      } catch (e) {
+        console.log(`[Judi's Wishlist] Failed to fix image for item ${item.id}: ${e.message}`);
+        fixImagesStatus.failed++;
       }
+
+      fixImagesStatus.processed++;
+      // Small delay between items
+      await new Promise(r => setTimeout(r, 500));
     }
   } catch (e) {
     console.error('[Judi\'s Wishlist] Fix images error:', e);
