@@ -481,6 +481,9 @@ def import_items():
                     results.append({
                         'id': existing['id'],
                         'product_id': product_id,
+                        'product_url': existing.get('product_url', ''),
+                        'image_url': existing.get('image_url', ''),
+                        'title': existing.get('title', ''),
                         'status': 'updated',
                         'old_price': old_price,
                         'new_price': new_price
@@ -514,6 +517,9 @@ def import_items():
                     results.append({
                         'id': existing['id'],
                         'product_id': product_id,
+                        'product_url': existing.get('product_url', ''),
+                        'image_url': existing.get('image_url', ''),
+                        'title': existing.get('title', ''),
                         'status': 'skipped'
                     })
                     skipped += 1
@@ -550,6 +556,9 @@ def import_items():
             results.append({
                 'id': item['id'],
                 'product_id': product_id,
+                'product_url': import_url,
+                'image_url': import_image,
+                'title': item_data.get('title', 'Unknown Product'),
                 'status': 'imported'
             })
             imported += 1

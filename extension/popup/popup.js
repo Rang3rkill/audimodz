@@ -1667,54 +1667,41 @@ async function pasteFromClipboard() {
 // Refresh images: scrape cart for images and push to server
 async function refreshImages() {
   elements.refreshImagesBtn.disabled = true;
-  elements.refreshImagesBtn.textContent = '🖼️ Scanning cart for images...';
+  elements.refreshImagesBtn.textContent = '🖼️ Opening product pages...';
   elements.refreshResult.classList.add('hidden');
 
   try {
-    // Re-use the existing scraper to get items with images
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      func: currentStore.key === 'temu' ? scrapeTemuAllTabs : scrapeCartItems,
-      args: [currentStore.key],
-    });
+    // Tell background to open every product page and grab images
+    chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START', mode: 'all' });
 
-    const items = results[0]?.result || [];
-    if (items.length === 0) {
-      elements.refreshResult.textContent = 'No items found on cart page.';
-      elements.refreshResult.className = 'result error';
-      elements.refreshResult.classList.remove('hidden');
-      return;
-    }
-
-    // Build updates: extract goods_id from product_url and pair with image
-    const updates = [];
-    for (const item of items) {
-      if (!item.image_url || !item.product_url) continue;
-      const match = item.product_url.match(/goods_id=(\d+)/);
-      if (!match) continue;
-      updates.push({ goods_id: match[1], image_url: item.image_url });
-    }
-
-    elements.refreshImagesBtn.textContent = `🖼️ Pushing ${updates.length} images...`;
-
-    const response = await fetch(`${API_BASE}/api/items/update-images`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates }),
-    });
-
-    if (!response.ok) throw new Error('Server error');
-
-    const data = await response.json();
-    elements.refreshResult.textContent = `Updated ${data.updated} of ${data.total} images`;
+    elements.refreshResult.textContent = 'Opening product pages to grab images...';
     elements.refreshResult.className = 'result success';
     elements.refreshResult.classList.remove('hidden');
+
+    // Poll for status
+    const poll = () => {
+      chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
+        if (!status) return;
+
+        const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+        elements.refreshResult.textContent = `${status.processed}/${status.total} — ${status.updated} updated${status.current ? ' — ' + status.current : ''}`;
+        elements.refreshImagesBtn.textContent = `🖼️ ${pct}% (${status.processed}/${status.total})`;
+
+        if (status.running) {
+          setTimeout(poll, 2000);
+        } else {
+          elements.refreshImagesBtn.disabled = false;
+          elements.refreshImagesBtn.textContent = '🖼️ Refresh All Images';
+          elements.refreshResult.textContent = `Done! Updated ${status.updated} images, ${status.failed} failed out of ${status.total}`;
+        }
+      });
+    };
+    setTimeout(poll, 3000);
   } catch (error) {
     console.error('Image refresh failed:', error);
     elements.refreshResult.textContent = 'Failed: ' + error.message;
     elements.refreshResult.className = 'result error';
     elements.refreshResult.classList.remove('hidden');
-  } finally {
     elements.refreshImagesBtn.disabled = false;
     elements.refreshImagesBtn.textContent = '🖼️ Refresh All Images';
   }
@@ -1733,86 +1720,38 @@ elements.fixImagesBtn.addEventListener('click', fixMissingImages);
 
 async function fixMissingImages() {
   elements.fixImagesBtn.disabled = true;
-  elements.fixImagesBtn.textContent = '🔧 Scrolling cart to load all items...';
+  elements.fixImagesBtn.textContent = '🔧 Starting...';
   elements.fixImagesStatus.classList.remove('hidden');
-  elements.fixImagesStatus.textContent = 'Scrolling through cart page to find all images...';
+  elements.fixImagesStatus.textContent = 'Opening product pages to grab images...';
 
   try {
-    // Step 1: Scrape the cart page the user is already on.
-    // This is the most reliable source — the images are RIGHT THERE on screen.
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      func: currentStore.key === 'temu' ? scrapeTemuAllTabs : scrapeCartItems,
-      args: [currentStore.key],
-    });
+    // Tell background to open each product page with a bad/missing image
+    chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START', mode: 'needs-fix' });
 
-    const cartItems = results[0]?.result || [];
-    elements.fixImagesBtn.textContent = `🔧 Found ${cartItems.length} items, pushing images...`;
+    // Poll for status
+    const poll = () => {
+      chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
+        if (!status) return;
 
-    // Step 2: Build image updates from cart scrape — match by goods_id
-    const updates = [];
-    for (const item of cartItems) {
-      if (!item.image_url || !item.product_url) continue;
-      const match = item.product_url.match(/goods_id=(\d+)/);
-      if (!match) continue;
-      updates.push({ goods_id: match[1], image_url: item.image_url });
-    }
+        const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+        elements.fixImagesStatus.textContent = `${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.current ? ' — ' + status.current : ''}`;
+        elements.fixImagesBtn.textContent = `🔧 ${pct}% (${status.processed}/${status.total})`;
 
-    let cartFixed = 0;
-    if (updates.length > 0) {
-      const response = await fetch(`${API_BASE}/api/items/update-images`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updates }),
+        if (status.running) {
+          setTimeout(poll, 2000);
+        } else {
+          elements.fixImagesBtn.disabled = false;
+          elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
+          if (status.total === 0) {
+            elements.fixImagesStatus.textContent = 'All items already have valid images!';
+          } else {
+            elements.fixImagesStatus.textContent = `Done! Fixed ${status.updated} images, ${status.failed} failed out of ${status.total}`;
+          }
+        }
       });
-      if (response.ok) {
-        const data = await response.json();
-        cartFixed = data.updated || 0;
-      }
-    }
+    };
 
-    elements.fixImagesStatus.textContent = `Cart scan: updated ${cartFixed} of ${updates.length} images from cart page.`;
-
-    // Step 3: Check if there are still items needing images, use background tabs for those
-    const needsResp = await fetch(`${API_BASE}/api/items/needs-images`);
-    if (needsResp.ok) {
-      const needsData = await needsResp.json();
-      const remaining = needsData.count || 0;
-      const autoFixed = needsData.auto_fixed || 0;
-
-      if (remaining > 0) {
-        elements.fixImagesStatus.textContent = `Cart scan fixed ${cartFixed} images (${autoFixed} auto-fixed). ${remaining} still need images — opening product pages...`;
-
-        // Start background tab scraping for remaining items
-        chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START' });
-
-        const poll = () => {
-          chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
-            if (!status) return;
-
-            const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
-            elements.fixImagesStatus.textContent = `Cart: ${cartFixed} fixed | Tabs: ${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.current ? ' — ' + status.current : ''}`;
-            elements.fixImagesBtn.textContent = `🔧 ${pct}% (${status.processed}/${status.total})`;
-
-            if (status.running) {
-              setTimeout(poll, 2000);
-            } else {
-              elements.fixImagesBtn.disabled = false;
-              elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
-              elements.fixImagesStatus.textContent = `Done! Cart: ${cartFixed} fixed. Tabs: ${status.updated} fixed, ${status.failed} failed.`;
-            }
-          });
-        };
-        setTimeout(poll, 3000);
-      } else {
-        elements.fixImagesBtn.disabled = false;
-        elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
-        elements.fixImagesStatus.textContent = `All done! ${cartFixed} images updated from cart page${autoFixed ? `, ${autoFixed} auto-fixed from saved data` : ''}.`;
-      }
-    } else {
-      elements.fixImagesBtn.disabled = false;
-      elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
-    }
+    setTimeout(poll, 3000);
   } catch (error) {
     elements.fixImagesStatus.textContent = 'Error: ' + error.message;
     elements.fixImagesBtn.disabled = false;
