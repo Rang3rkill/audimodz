@@ -105,19 +105,20 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // FIX IMAGES: Open each product page, grab real image, update DB
 // ============================================================
 let fixImagesRunning = false;
-let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
+let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, autoFixed: 0, current: '' };
 
 async function fixMissingImages() {
   if (fixImagesRunning) return fixImagesStatus;
   fixImagesRunning = true;
-  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
+  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, autoFixed: 0, current: '' };
 
   try {
-    // 1. Ask server which items need images
+    // 1. Ask server which items need images (server auto-fixes items with embedded thumb_urls)
     const resp = await fetch(`${API_BASE}/api/items/needs-images`);
     if (!resp.ok) throw new Error('Failed to get items needing images');
-    const { items } = await resp.json();
+    const { items, auto_fixed } = await resp.json();
 
+    fixImagesStatus.autoFixed = auto_fixed || 0;
     fixImagesStatus.total = items.length;
     if (items.length === 0) {
       fixImagesRunning = false;
@@ -167,79 +168,195 @@ async function fixMissingImages() {
 }
 
 async function scrapeImageFromProductPage(url) {
+  // First, check if the product URL already has a thumb_url embedded (set by extension during import)
+  try {
+    const urlObj = new URL(url);
+    const embeddedThumb = urlObj.searchParams.get('thumb_url');
+    if (embeddedThumb) {
+      const decoded = decodeURIComponent(embeddedThumb);
+      if (decoded.startsWith('http')) {
+        console.log(`[Judi's Wishlist] Using embedded thumb_url for ${url.substring(0, 60)}`);
+        return decoded;
+      }
+    }
+  } catch {}
+
   // Open the product page in a background tab
   const tab = await chrome.tabs.create({ url, active: false });
 
   try {
     // Wait for the page to load
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Tab load timeout')), 20000);
+      const timeout = setTimeout(() => reject(new Error('Tab load timeout')), 30000);
 
       function listener(tabId, changeInfo) {
         if (tabId === tab.id && changeInfo.status === 'complete') {
           chrome.tabs.onUpdated.removeListener(listener);
           clearTimeout(timeout);
-          // Give JS a moment to render
-          setTimeout(resolve, 2000);
+          // Give Temu's heavy JS more time to render (SPA needs longer)
+          setTimeout(resolve, 5000);
         }
       }
       chrome.tabs.onUpdated.addListener(listener);
     });
 
-    // Execute script to grab the product image
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        // Try multiple sources for the product image
-        // 1. og:image meta tag (most reliable on product pages)
-        const ogImage = document.querySelector('meta[property="og:image"]');
-        if (ogImage?.content && ogImage.content.startsWith('http')) {
-          return ogImage.content;
-        }
+    // Try scraping up to 3 times with increasing wait times
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, 3000));
+      }
 
-        // 2. Look for product image in JSON-LD
-        const jsonLd = document.querySelectorAll('script[type="application/ld+json"]');
-        for (const script of jsonLd) {
-          try {
-            const data = JSON.parse(script.textContent);
-            if (data.image) {
-              const img = Array.isArray(data.image) ? data.image[0] : data.image;
-              if (typeof img === 'string' && img.startsWith('http')) return img;
-              if (img?.url && img.url.startsWith('http')) return img.url;
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const BAD_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
+            'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
+            'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/'];
+
+          function isGoodImage(url) {
+            if (!url || !url.startsWith('http')) return false;
+            const lower = url.toLowerCase();
+            for (const p of BAD_PATTERNS) {
+              if (lower.includes(p)) return false;
             }
-          } catch {}
-        }
-
-        // 3. Look for thumb_url in page scripts
-        const scripts = document.querySelectorAll('script:not([src])');
-        for (const script of scripts) {
-          const text = script.textContent;
-          const match = text.match(/"thumb_url"\s*:\s*"(https?:[^"]+)"/);
-          if (match) {
-            return match[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+            // Must be from a known Temu CDN
+            if (!lower.includes('kwcdn') && !lower.includes('akamaized') &&
+                !lower.includes('temu') && !lower.includes('cloudfront')) return false;
+            if (url.length < 30) return false;
+            return true;
           }
-        }
 
-        // 4. First large product image on the page
-        const imgs = document.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"]');
-        for (const img of imgs) {
-          if (img.naturalWidth > 100 && img.naturalHeight > 100 && img.src.startsWith('http')) {
-            return img.src;
+          // 1. og:image meta tag
+          const ogImage = document.querySelector('meta[property="og:image"]');
+          if (ogImage?.content && isGoodImage(ogImage.content)) {
+            return ogImage.content;
           }
-        }
 
-        // 5. Any img with product-like src
-        for (const img of imgs) {
-          if (img.src.startsWith('http') && img.src.includes('product')) {
-            return img.src;
+          // 2. JSON-LD structured data
+          const jsonLd = document.querySelectorAll('script[type="application/ld+json"]');
+          for (const script of jsonLd) {
+            try {
+              const data = JSON.parse(script.textContent);
+              if (data.image) {
+                const img = Array.isArray(data.image) ? data.image[0] : data.image;
+                const imgUrl = typeof img === 'string' ? img : img?.url;
+                if (isGoodImage(imgUrl)) return imgUrl;
+              }
+            } catch {}
           }
-        }
 
-        return null;
-      },
-    });
+          // 3. Search ALL inline scripts for thumb_url, hdThumbUrl, goods_img patterns
+          const scripts = document.querySelectorAll('script:not([src])');
+          for (const script of scripts) {
+            const text = script.textContent;
+            if (!text || text.length < 10) continue;
 
-    return results[0]?.result || null;
+            // Try multiple JSON key patterns
+            const patterns = [
+              /"thumb_url"\s*:\s*"(https?:[^"]+)"/,
+              /"thumbUrl"\s*:\s*"(https?:[^"]+)"/,
+              /"hdThumbUrl"\s*:\s*"(https?:[^"]+)"/,
+              /"goods_img"\s*:\s*"(https?:[^"]+)"/,
+              /"goodsImg"\s*:\s*"(https?:[^"]+)"/,
+              /"image_url"\s*:\s*"(https?:[^"]+)"/,
+              /"imageUrl"\s*:\s*"(https?:[^"]+)"/,
+              /"originImage"\s*:\s*"(https?:[^"]+)"/,
+            ];
+
+            for (const pattern of patterns) {
+              const match = text.match(pattern);
+              if (match) {
+                const found = match[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+                if (isGoodImage(found)) return found;
+              }
+            }
+          }
+
+          // 4. Gallery/carousel images (Temu uses these on product pages)
+          const gallerySelectors = [
+            // Temu product gallery containers
+            'img[data-not-lazy][src*="kwcdn"]',
+            'img[data-not-lazy][src*="akamaized"]',
+            '.product-img img',
+            '.goods-img img',
+            '.gallery img',
+            '[class*="gallery"] img',
+            '[class*="Gallery"] img',
+            '[class*="ProductImage"] img',
+            '[class*="product-image"] img',
+            '[class*="goodsImage"] img',
+            '[class*="mainImage"] img',
+            '[class*="MainImage"] img',
+            // Generic product page image containers
+            '[data-testid*="image"] img',
+            '[data-testid*="gallery"] img',
+          ];
+
+          for (const selector of gallerySelectors) {
+            try {
+              const imgs = document.querySelectorAll(selector);
+              for (const img of imgs) {
+                // Check src, data-src, and srcset
+                const src = img.src || img.dataset.src || img.getAttribute('data-origin-src') || '';
+                if (isGoodImage(src)) return src;
+
+                // Check srcset for high-res version
+                const srcset = img.srcset || img.dataset.srcset || '';
+                if (srcset) {
+                  const parts = srcset.split(',');
+                  for (const part of parts) {
+                    const srcUrl = part.trim().split(/\s+/)[0];
+                    if (isGoodImage(srcUrl)) return srcUrl;
+                  }
+                }
+              }
+            } catch {}
+          }
+
+          // 5. Any CDN image on the page (src, data-src, or style background)
+          const allImgs = document.querySelectorAll('img');
+          for (const img of allImgs) {
+            // Try data-src first (lazy-loaded images)
+            const dataSrc = img.dataset.src || img.getAttribute('data-origin-src') || '';
+            if (isGoodImage(dataSrc)) return dataSrc;
+
+            // Then actual src (skip tiny icons - check dimensions OR lack thereof in background tabs)
+            const src = img.src;
+            if (isGoodImage(src)) {
+              // In background tabs naturalWidth may be 0 due to lazy loading,
+              // so also accept images without dimension info
+              const w = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
+              const h = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
+              if (w === 0 && h === 0) return src; // Can't check size, trust the CDN domain
+              if (w > 50 && h > 50) return src;
+            }
+          }
+
+          // 6. CSS background images from product containers
+          const bgSelectors = ['[class*="product"]', '[class*="goods"]', '[class*="gallery"]',
+            '[class*="image"]', '[class*="thumb"]', '[class*="main-pic"]'];
+          for (const sel of bgSelectors) {
+            try {
+              const els = document.querySelectorAll(sel);
+              for (const el of els) {
+                const bg = getComputedStyle(el).backgroundImage;
+                if (bg && bg !== 'none') {
+                  const match = bg.match(/url\(["']?(https?:\/\/[^"')]+)/);
+                  if (match && isGoodImage(match[1])) return match[1];
+                }
+              }
+            } catch {}
+          }
+
+          return null;
+        },
+      });
+
+      const imageUrl = results[0]?.result;
+      if (imageUrl) return imageUrl;
+    }
+
+    return null;
   } finally {
     // Always close the tab
     try { await chrome.tabs.remove(tab.id); } catch {}

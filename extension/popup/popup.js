@@ -1755,10 +1755,11 @@ async function fixMissingImages() {
         } else {
           elements.fixImagesBtn.disabled = false;
           elements.fixImagesBtn.textContent = '🔧 Fix Missing Images (opens product pages)';
+          const autoMsg = status.autoFixed ? ` (${status.autoFixed} auto-fixed from saved data)` : '';
           if (status.total === 0) {
-            elements.fixImagesStatus.textContent = 'All items already have valid images!';
+            elements.fixImagesStatus.textContent = `All items already have valid images!${autoMsg}`;
           } else {
-            elements.fixImagesStatus.textContent = `Done! Fixed ${status.updated} images, ${status.failed} failed out of ${status.total}`;
+            elements.fixImagesStatus.textContent = `Done! Fixed ${status.updated} images, ${status.failed} failed out of ${status.total}${autoMsg}`;
           }
         }
       });
