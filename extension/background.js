@@ -285,6 +285,9 @@ async function scrapeImageFromProductPage(url) {
     // Give Temu's JS time to render images
     await sleep(4000);
 
+    // Check for and wait for security verification (CAPTCHA) if present
+    await waitForSecurityCheck(tab.id);
+
     // Dismiss any popups/overlays that might block the page
     await dismissPopups(tab.id);
     await sleep(800);
@@ -362,6 +365,91 @@ async function dismissPopups(tabId) {
       },
     });
   } catch {} // Ignore errors (tab may have navigated to restricted URL)
+}
+
+/**
+ * Check if a security verification (CAPTCHA) is present on the page.
+ * Returns true if a security check modal is detected.
+ */
+async function hasSecurityCheck(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Look for security verification modals/text
+        const pageText = document.body?.innerText?.toLowerCase() || '';
+        const hasVerificationText = pageText.includes('security verification') ||
+          pageText.includes('verify you are human') ||
+          pageText.includes('click on the corresponding') ||
+          pageText.includes('select all images') ||
+          pageText.includes('captcha');
+
+        // Also check for common CAPTCHA container elements
+        const captchaSelectors = [
+          '[class*="captcha"]', '[class*="Captcha"]', '[class*="CAPTCHA"]',
+          '[class*="verification"]', '[class*="Verification"]',
+          '[class*="security-check"]', '[class*="SecurityCheck"]',
+          '[id*="captcha"]', '[id*="verification"]',
+          'iframe[src*="captcha"]', 'iframe[src*="challenge"]',
+        ];
+
+        for (const sel of captchaSelectors) {
+          try {
+            const el = document.querySelector(sel);
+            if (el && el.offsetParent !== null) {
+              return true;
+            }
+          } catch {}
+        }
+
+        return hasVerificationText;
+      },
+    });
+    return results?.[0]?.result || false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for the user to complete a security verification if one is present.
+ * Polls every 3 seconds for up to 90 seconds.
+ */
+async function waitForSecurityCheck(tabId) {
+  const maxWaitMs = 90000; // 90 seconds to complete CAPTCHA
+  const pollIntervalMs = 3000; // Check every 3 seconds
+  const startTime = Date.now();
+
+  // First check if there's a security check
+  let hasCheck = await hasSecurityCheck(tabId);
+
+  if (!hasCheck) {
+    return; // No security check, continue normally
+  }
+
+  console.log('[Judi\'s Wishlist] Security verification detected - waiting for user to complete it...');
+
+  // Wait for the security check to be completed
+  while (hasCheck && (Date.now() - startTime) < maxWaitMs) {
+    await sleep(pollIntervalMs);
+
+    // Check if tab still exists
+    try {
+      await chrome.tabs.get(tabId);
+    } catch {
+      return; // Tab was closed
+    }
+
+    hasCheck = await hasSecurityCheck(tabId);
+  }
+
+  if (!hasCheck) {
+    console.log('[Judi\'s Wishlist] Security verification completed - continuing with scrape');
+    // Give the page a moment to settle after CAPTCHA completion
+    await sleep(2000);
+  } else {
+    console.log('[Judi\'s Wishlist] Security verification timeout - proceeding anyway');
+  }
 }
 
 async function executeImageScrape(tabId) {
