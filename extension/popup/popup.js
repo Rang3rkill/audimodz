@@ -25,6 +25,7 @@ const elements = {
   result: document.getElementById('result'),
   refreshImagesBtn: document.getElementById('refreshImagesBtn'),
   fixImagesBtn: document.getElementById('fixImagesBtn'),
+  cancelFixBtn: document.getElementById('cancelFixBtn'),
   fixImagesStatus: document.getElementById('fixImagesStatus'),
   refreshResult: document.getElementById('refreshResult'),
   // Share link section
@@ -1692,7 +1693,10 @@ async function refreshImages() {
         } else {
           elements.refreshImagesBtn.disabled = false;
           elements.refreshImagesBtn.textContent = '🖼️ Refresh All Images';
-          elements.refreshResult.textContent = `Done! Updated ${status.updated} images, ${status.failed} failed out of ${status.total}`;
+          let doneMsg = `Done! Updated ${status.updated} images, ${status.failed} failed`;
+          if (status.skipped > 0) doneMsg += `, ${status.skipped} already correct`;
+          doneMsg += ` out of ${status.total}`;
+          elements.refreshResult.textContent = doneMsg;
         }
       });
     };
@@ -1717,10 +1721,17 @@ elements.shareImportBtn.addEventListener('click', importFromShareLink);
 elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
 elements.refreshImagesBtn.addEventListener('click', refreshImages);
 elements.fixImagesBtn.addEventListener('click', fixMissingImages);
+elements.cancelFixBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'FIX_IMAGES_CANCEL' }, () => {
+    elements.cancelFixBtn.classList.add('hidden');
+    elements.fixImagesStatus.textContent += ' (cancelling...)';
+  });
+});
 
 async function fixMissingImages() {
   elements.fixImagesBtn.disabled = true;
   elements.fixImagesBtn.textContent = '🔧 Starting...';
+  elements.cancelFixBtn.classList.remove('hidden');
   elements.fixImagesStatus.classList.remove('hidden');
   elements.fixImagesStatus.textContent = 'Opening product pages to grab images...';
 
@@ -1734,7 +1745,7 @@ async function fixMissingImages() {
         if (!status) return;
 
         const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
-        elements.fixImagesStatus.textContent = `${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.current ? ' — ' + status.current : ''}`;
+        elements.fixImagesStatus.textContent = `${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.skipped ? ', ' + status.skipped + ' already correct' : ''}${status.current ? ' — ' + status.current : ''}`;
         elements.fixImagesBtn.textContent = `🔧 ${pct}% (${status.processed}/${status.total})`;
 
         if (status.running) {
@@ -1742,10 +1753,14 @@ async function fixMissingImages() {
         } else {
           elements.fixImagesBtn.disabled = false;
           elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
+          elements.cancelFixBtn.classList.add('hidden');
           if (status.total === 0) {
             elements.fixImagesStatus.textContent = 'All items already have valid images!';
           } else {
-            elements.fixImagesStatus.textContent = `Done! Fixed ${status.updated} images, ${status.failed} failed out of ${status.total}`;
+            let doneMsg = `Done! Fixed ${status.updated} images, ${status.failed} failed`;
+            if (status.skipped > 0) doneMsg += `, ${status.skipped} already correct`;
+            doneMsg += ` out of ${status.total}`;
+            elements.fixImagesStatus.textContent = doneMsg;
           }
         }
       });
@@ -1756,6 +1771,7 @@ async function fixMissingImages() {
     elements.fixImagesStatus.textContent = 'Error: ' + error.message;
     elements.fixImagesBtn.disabled = false;
     elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
+    elements.cancelFixBtn.classList.add('hidden');
   }
 }
 

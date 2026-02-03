@@ -328,7 +328,7 @@ class Item:
                     stats['oldest_item_age'] = f'{diff_days // 30} months'
                 else:
                     stats['oldest_item_age'] = f'{diff_days // 365} years'
-            except:
+            except (ValueError, TypeError):
                 stats['oldest_item_age'] = '-'
         else:
             stats['oldest_item_age'] = '-'

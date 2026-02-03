@@ -266,6 +266,19 @@ async function scrapeImageFromProductPage(url) {
     // Wait for the page to fully load
     await waitForTabLoad(tab.id, 25000);
 
+    // Check if the tab navigated to an error page or was redirected away
+    let tabInfo;
+    try {
+      tabInfo = await chrome.tabs.get(tab.id);
+    } catch {
+      return null; // Tab was closed externally
+    }
+    const tabUrl = (tabInfo.url || '').toLowerCase();
+    if (tabUrl.startsWith('chrome-error://') || tabUrl.startsWith('chrome://') || tabUrl === 'about:blank') {
+      console.log(`[Judi's Wishlist] Tab navigated to error/restricted page: ${tabUrl}`);
+      return null;
+    }
+
     // Give Temu's JS time to render images
     await sleep(4000);
 

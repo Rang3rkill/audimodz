@@ -34,7 +34,7 @@ def is_valid_product_image(url):
         if pattern in url_lower:
             return False
     # Must be from a known CDN with product-like path
-    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront']):
+    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront', 'cdn', 'img.']):
         return False
     # Product images typically have dimensions or product identifiers
     # Very short URLs are suspicious
@@ -215,14 +215,30 @@ def get_item(item_id):
 
 @items_bp.route('/<int:item_id>', methods=['PATCH'])
 def update_item(item_id):
-    """Update an item."""
-    data = request.get_json()
+    """Update an item. Handles both web app updates and extension image pushes."""
+    data = request.get_json() or {}
+    existing = Item.get_by_id(item_id)
+    if not existing:
+        return jsonify({'error': 'Item not found'}), 404
+
+    # Validate image_url if provided — reject placeholders/bad patterns
+    if 'image_url' in data:
+        new_img = data['image_url']
+        if isinstance(new_img, str) and new_img.startswith('http') and is_valid_product_image(new_img):
+            data['image_url'] = new_img
+            # Embed thumb_url in product_url for future recovery
+            current_url = existing.get('product_url', '')
+            if current_url and 'thumb_url=' not in current_url:
+                data['product_url'] = ensure_thumb_url(current_url, new_img)
+        else:
+            # Don't save a bad image — remove it from the update
+            del data['image_url']
 
     # Track price changes
-    if 'current_price' in data:
-        existing = Item.get_by_id(item_id)
-        if existing and existing.get('current_price') != data['current_price']:
-            data['last_price'] = existing.get('current_price')
+    if 'current_price' in data and data['current_price'] is not None:
+        old_price = existing.get('current_price')
+        if old_price is not None and old_price != data['current_price']:
+            data['last_price'] = old_price
             data['price_updated_at'] = datetime.now().isoformat()
 
     item = Item.update(item_id, **data)
@@ -1322,37 +1338,6 @@ def needs_images():
 
     return jsonify({ 'items': needs, 'count': len(needs), 'auto_fixed': auto_fixed })
 
-
-@items_bp.route('/<int:item_id>', methods=['PATCH'])
-def patch_item(item_id):
-    """Update specific fields on an item (used by extension to push scraped images)."""
-    item = Item.get_by_id(item_id)
-    if not item:
-        return jsonify({'error': 'Item not found'}), 404
-
-    data = request.get_json() or {}
-    updates = {}
-
-    if 'image_url' in data:
-        new_img = data['image_url']
-        if isinstance(new_img, str) and new_img.startswith('http') and is_valid_product_image(new_img):
-            updates['image_url'] = new_img
-            # Also embed thumb_url in product_url for future recovery
-            current_url = item.get('product_url', '')
-            if current_url and 'thumb_url=' not in current_url:
-                updates['product_url'] = ensure_thumb_url(current_url, new_img)
-
-    if 'title' in data and data['title']:
-        updates['title'] = data['title']
-
-    if 'current_price' in data and data['current_price'] is not None:
-        updates['current_price'] = float(data['current_price'])
-
-    if not updates:
-        return jsonify({'error': 'No valid fields to update'}), 400
-
-    updated = Item.update(item_id, **updates)
-    return jsonify({'success': True, 'item': updated})
 
 
 @items_bp.route('/bad-images', methods=['GET'])
