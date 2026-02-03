@@ -26,11 +26,11 @@ function extractAmazonAsin(element) {
   // Try data attribute first
   if (element.dataset?.asin) return element.dataset.asin;
 
-  // Try URL
+  // Try URL (case-insensitive - ASINs can appear in various cases in URLs)
   const link = element.querySelector(AMAZON_SELECTORS.productLink);
   if (link) {
-    const match = link.href.match(/\/dp\/([A-Z0-9]{10})/);
-    return match ? match[1] : null;
+    const match = link.href.match(/\/dp\/([A-Za-z0-9]{10})/i);
+    return match ? match[1].toUpperCase() : null;  // Normalize to uppercase
   }
   return null;
 }
@@ -72,19 +72,55 @@ function scrapeAmazonCart() {
     const img = item.querySelector(AMAZON_SELECTORS.productImage);
     const imageUrl = img?.src || null;
 
-    // Get price
+    // Get price (current and original for sale detection)
     let price = null;
-    const priceEl = item.querySelector(AMAZON_SELECTORS.price);
-    if (priceEl) {
-      const priceText = priceEl.textContent?.replace(/[^0-9.]/g, '');
-      price = parseFloat(priceText) || null;
+    let originalPrice = null;
+
+    // Current price selectors
+    const currentPriceSelectors = [
+      '.sc-product-price', '.sc-price',
+      '.a-price:not([data-a-strike]) .a-offscreen',
+      '.a-color-price',
+    ];
+    // Original/was price selectors (strikethrough)
+    const originalPriceSelectors = [
+      '.a-price[data-a-strike] .a-offscreen',
+      '.a-text-strike .a-offscreen',
+      '.a-text-strike',
+    ];
+
+    for (const sel of currentPriceSelectors) {
+      const el = item.querySelector(sel);
+      if (el) {
+        const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+        const parsed = parseFloat(priceText);
+        if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
+          price = parsed;
+          break;
+        }
+      }
     }
 
-    // Get quantity
+    for (const sel of originalPriceSelectors) {
+      const el = item.querySelector(sel);
+      if (el) {
+        const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+        const parsed = parseFloat(priceText);
+        if (!isNaN(parsed) && parsed > 0 && parsed < 100000 && parsed > (price || 0)) {
+          originalPrice = parsed;
+          break;
+        }
+      }
+    }
+
+    // Get quantity (handle input and select elements)
     let quantity = 1;
     const qtyEl = item.querySelector(AMAZON_SELECTORS.quantity);
     if (qtyEl) {
-      quantity = parseInt(qtyEl.value) || 1;
+      const parsedQty = parseInt(qtyEl.value);
+      if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+        quantity = parsedQty;
+      }
     }
 
     items.push({
@@ -93,6 +129,7 @@ function scrapeAmazonCart() {
       title: title,
       image_url: imageUrl,
       price: price,
+      original_price: originalPrice,
       quantity: quantity,
     });
   });

@@ -407,9 +407,21 @@ const App = {
             headers: {
                 'Content-Type': 'application/json',
             },
+            signal: AbortSignal.timeout(30000), // 30 second timeout
             ...options,
         });
-        const data = await response.json();
+
+        // Handle non-JSON responses gracefully (server errors, etc)
+        let data;
+        try {
+            data = await response.json();
+        } catch (e) {
+            if (!response.ok) {
+                throw new Error(`Server error (${response.status})`);
+            }
+            throw new Error('Invalid response from server');
+        }
+
         if (!response.ok) {
             throw new Error(data.error || `Request failed (${response.status})`);
         }
@@ -960,7 +972,7 @@ const App = {
     // Render single item card
     renderItemCard(item) {
         const imageHtml = item.image_url
-            ? `<img src="${item.image_url}" alt="${this.escapeHtml(item.title)}" class="item-image" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'item-image-placeholder\\'>?</div>'">`
+            ? `<img src="${this.escapeAttr(item.image_url)}" alt="${this.escapeHtml(item.title)}" class="item-image" loading="lazy" onerror="this.parentElement.innerHTML='<div class=\\'item-image-placeholder\\'>?</div>'">`
             : '<div class="item-image-placeholder">?</div>';
 
         const storeClass = item.store.toLowerCase();
@@ -1020,7 +1032,7 @@ const App = {
 
         // View on store link
         const viewLink = item.product_url
-            ? `<a href="${item.product_url}" target="_blank" class="view-link" title="View on ${storeName}">&#128279;</a>`
+            ? `<a href="${this.escapeAttr(item.product_url)}" target="_blank" class="view-link" title="View on ${storeName}">&#128279;</a>`
             : '';
 
         // Refresh button - always show for items with a product URL (can update price or missing data)
@@ -1378,7 +1390,7 @@ const App = {
 
             for (const item of store.items) {
                 const imgHtml = item.image_url
-                    ? `<img src="${item.image_url}" alt="" class="ready-item-image">`
+                    ? `<img src="${this.escapeAttr(item.image_url)}" alt="" class="ready-item-image">`
                     : '<div class="ready-item-image"></div>';
 
                 const price = (item.current_price !== null && item.current_price !== undefined) ? item.current_price : 0;
@@ -1843,7 +1855,13 @@ const App = {
                 headers: { 'Content-Type': 'application/json' },
             });
 
-            const data = await response.json();
+            let data;
+            try {
+                data = await response.json();
+            } catch (e) {
+                this.showToast(`Server error (${response.status})`, 'error');
+                return;
+            }
 
             if (!response.ok) {
                 this.showToast(data.error || 'Cannot delete this list', 'error');
@@ -2281,6 +2299,17 @@ const App = {
         const div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+    },
+
+    // Helper: escape HTML attribute values (for src, href, etc.)
+    escapeAttr(str) {
+        if (!str) return '';
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
     },
 };
 

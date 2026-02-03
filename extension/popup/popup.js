@@ -25,6 +25,7 @@ const elements = {
   result: document.getElementById('result'),
   refreshImagesBtn: document.getElementById('refreshImagesBtn'),
   fixImagesBtn: document.getElementById('fixImagesBtn'),
+  cancelFixBtn: document.getElementById('cancelFixBtn'),
   fixImagesStatus: document.getElementById('fixImagesStatus'),
   refreshResult: document.getElementById('refreshResult'),
   // Share link section
@@ -109,13 +110,22 @@ function updateScanSection() {
 // Load lists from the wishlist app
 async function loadLists() {
   try {
-    const response = await fetch(`${API_BASE}/api/lists`);
+    const response = await fetch(`${API_BASE}/api/lists`, {
+      signal: AbortSignal.timeout(5000), // 5 second timeout
+    });
     if (!response.ok) throw new Error('Could not connect to wishlist app');
 
     const lists = await response.json();
 
+    // Escape HTML to prevent XSS from malicious list names
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
     const optionsHtml = lists.map(list =>
-      `<option value="${list.id}">${list.name}</option>`
+      `<option value="${list.id}">${escapeHtml(list.name)}</option>`
     ).join('');
 
     elements.listSelect.innerHTML = optionsHtml;
@@ -177,21 +187,49 @@ async function importCart() {
 
     elements.importBtn.textContent = `Importing ${items.length} items...`;
 
-    // Send to wishlist app
-    const listId = parseInt(elements.listSelect.value);
-    const response = await fetch(`${API_BASE}/api/items/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        store: currentStore.key,
-        items: items,
-        list_id: listId,
-      }),
-    });
+    // Send to wishlist app with retry logic
+    const listId = parseInt(elements.listSelect.value) || 1;
+    let response;
+    let lastError;
 
-    if (!response.ok) throw new Error('Failed to import items');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        response = await fetch(`${API_BASE}/api/items/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            store: currentStore.key,
+            items: items,
+            list_id: listId,
+          }),
+          signal: AbortSignal.timeout(30000), // 30 second timeout
+        });
+        if (response.ok) {
+          lastError = null;
+          break;
+        } else {
+          lastError = new Error(`Server error: ${response.status}`);
+        }
+      } catch (e) {
+        lastError = e;
+        console.warn(`[Judi's Wishlist] Import attempt ${attempt} failed:`, e.message);
+      }
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, attempt * 2000));
+        elements.importBtn.textContent = `Retrying (${attempt}/3)...`;
+      }
+    }
 
-    const data = await response.json();
+    if (lastError || !response?.ok) {
+      throw new Error(lastError?.message || 'Failed to import items after 3 attempts');
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error('Invalid response from server')
+    }
     const scrapeStats = items._stats || null;
 
     // Build result message
@@ -375,68 +413,182 @@ function pickBestPrice(obj) {
   // Flatten nested price containers (Temu cart API nests prices in price_info)
   const pi = obj.price_info || obj.priceInfo || {};
   const ps = pi.price_schema || pi.priceSchema || {};
-  // Try sale/discount price fields first (the actual price to pay)
-  const candidates = [
-    pi.price, pi.price_str, pi.priceStr, pi.price_text, pi.split_price_text,
+
+  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
+  // and Temu's split arrays like ["$","4",".","9","9"]
+  // Returns { value: number, hasDecimalInSource: boolean, rawString: string|null }
+  function parsePrice(v) {
+    if (v == null) return { value: NaN, hasDecimalInSource: false, rawString: null };
+    if (typeof v === 'number') {
+      return { value: v, hasDecimalInSource: v % 1 !== 0, rawString: null };
+    }
+    if (Array.isArray(v)) {
+      const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
+      if (!joined) return { value: NaN, hasDecimalInSource: false, rawString: null };
+      return { value: parseFloat(joined.replace(/[^0-9.]/g, '')), hasDecimalInSource: joined.includes('.'), rawString: joined };
+    }
+    if (typeof v === 'string') {
+      return { value: parseFloat(v.replace(/[^0-9.]/g, '')), hasDecimalInSource: v.includes('.'), rawString: v };
+    }
+    return { value: NaN, hasDecimalInSource: false, rawString: null };
+  }
+
+  // Smart cent normalization - handles more edge cases than simple threshold
+  // Strategy: Use context clues to determine if a value is in cents or dollars
+  function normalizeCents(val, hasDecimal, rawString, contextPrices) {
+    if (val === null || isNaN(val)) return null;
+    // If source had decimal like "$4.99", it's definitely already in dollars
+    if (hasDecimal) return val;
+    // If source string had $ and digits like "$299", it's dollars not cents
+    if (rawString && rawString.includes('$') && /\$\s*\d/.test(rawString)) return val;
+    // If value is a float (not integer), it's already in dollars
+    if (!Number.isInteger(val)) return val;
+    // For integers: use smart heuristics
+    // If we have context prices (other prices from same object) that are clearly
+    // in dollars (have decimals), and this integer is 100x larger, it's likely cents
+    if (contextPrices && contextPrices.length > 0) {
+      const dollarPrices = contextPrices.filter(p => p.hasDecimal && p.value > 0 && p.value < 1000);
+      if (dollarPrices.length > 0) {
+        const avgDollar = dollarPrices.reduce((a, b) => a + b.value, 0) / dollarPrices.length;
+        // If this integer is roughly 100x a known dollar price, it's cents
+        if (val > avgDollar * 50 && val < avgDollar * 200) {
+          return val / 100;
+        }
+      }
+    }
+    // Fallback heuristic: integers >= 100 that look like cent values
+    // Pattern: 3-5 digit integers where dividing by 100 gives reasonable price
+    if (val >= 100 && val <= 999999) {
+      const asDollars = val / 100;
+      // If dividing by 100 gives a "normal" price range ($1-$9999), likely cents
+      // But avoid false positives: $150 item shouldn't become $1.50
+      // Key insight: cent values rarely end in 00 (e.g., 15000 for $150.00 is rare)
+      // Dollar values often are round numbers ($150, $200)
+      const lastTwoDigits = val % 100;
+      if (lastTwoDigits !== 0 && asDollars >= 0.50 && asDollars <= 9999) {
+        return asDollars;
+      }
+      // For values ending in 00, only treat as cents if very high (>= 10000 = $100+)
+      if (lastTwoDigits === 0 && val >= 10000) {
+        return asDollars;
+      }
+    }
+    return val;
+  }
+
+  // Collect all parsed prices for context
+  const allParsed = [];
+
+  // Explicit cent fields - always divide by 100 (field name indicates cents)
+  const centFields = [
+    obj.salePriceCent, obj.sale_price_cent,
+    obj.priceCent, obj.price_cent,
+    pi.priceCent, pi.price_cent,
+    pi.salePriceCent, pi.sale_price_cent,
+    ps.priceCent, ps.price_cent,
+  ];
+  for (const v of centFields) {
+    if (v != null && typeof v === 'number' && v > 0) {
+      const best = v / 100;
+      if (best >= 0.01 && best <= 99999) {
+        // Also try to find original price in cent form
+        const origCentFields = [obj.marketPriceCent, obj.market_price_cent, pi.marketPriceCent, pi.market_price_cent];
+        let origPrice = null;
+        for (const ov of origCentFields) {
+          if (ov != null && typeof ov === 'number' && ov > 0) {
+            const op = ov / 100;
+            if (op > best && op <= 99999) {
+              origPrice = op;
+              break;
+            }
+          }
+        }
+        return { salePrice: best, originalPrice: origPrice };
+      }
+    }
+  }
+
+  // Sale/discount price candidates (prioritize explicit sale fields)
+  // Order matters: most specific sale fields first, generic 'price' last
+  const saleCandidates = [
+    // Explicit sale/promo prices (highest priority)
     pi.sale_price, pi.salePrice,
-    pi.promo_price, pi.discount_price,
-    obj.sale_price, obj.salePrice, obj.salePriceCent,
-    pi.sale_price, pi.salePrice, ps.sale_price, ps.salePrice,
+    obj.sale_price, obj.salePrice,
+    ps.sale_price, ps.salePrice,
+    pi.promo_price, pi.promoPrice,
     obj.promo_price, obj.promoPrice,
-    pi.promo_price, pi.promoPrice, ps.promo_price, ps.promoPrice,
+    ps.promo_price, ps.promoPrice,
+    pi.discount_price, pi.discountPrice,
     obj.discount_price, obj.discountPrice,
-    pi.discount_price, pi.discountPrice, ps.discount_price, ps.discountPrice,
+    ps.discount_price, ps.discountPrice,
     obj.current_price, obj.currentPrice,
     pi.current_price, pi.currentPrice,
-    obj.price, obj.priceCent,
-    pi.price, pi.priceCent, ps.price, ps.priceCent,
+    // String representations (usually already formatted as dollars)
+    pi.price_str, pi.priceStr, pi.price_text,
+    pi.split_price_text,
+    // Generic price fields (lower priority - could be original price)
+    pi.price, obj.price, ps.price,
   ];
+
   // Original/market price candidates
   const originalCandidates = [
     pi.market_price, pi.marketPrice, pi.market_price_str,
     pi.original_price, pi.originalPrice,
     obj.market_price, obj.marketPrice,
     obj.original_price, obj.originalPrice,
+    ps.market_price, ps.marketPrice,
+    ps.original_price, ps.originalPrice,
   ];
 
-  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
-  // and Temu's split arrays like ["$","4",".","9","9"]
-  function parsePrice(v) {
-    if (v == null) return NaN;
-    if (typeof v === 'number') return v;
-    if (Array.isArray(v)) {
-      const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
-      if (!joined) return NaN;
-      return parseFloat(joined.replace(/[^0-9.]/g, ''));
+  // First pass: collect all parsed values for context
+  for (const v of [...saleCandidates, ...originalCandidates]) {
+    const parsed = parsePrice(v);
+    if (!isNaN(parsed.value) && parsed.value > 0) {
+      allParsed.push(parsed);
     }
-    if (typeof v === 'string') return parseFloat(v.replace(/[^0-9.]/g, ''));
-    return NaN;
   }
 
+  // Find best sale price
   let best = null;
-  for (const v of candidates) {
-    const n = parsePrice(v);
-    if (!isNaN(n) && n > 0) { best = n; break; }
-  }
-  let original = null;
-  for (const v of originalCandidates) {
-    const n = parsePrice(v);
-    if (!isNaN(n) && n > 0) { original = n; break; }
-  }
-  // Fall back: if no explicit original, use highest from all candidates
-  if (original === null) {
-    for (const v of [...candidates, ...originalCandidates]) {
-      const n = parsePrice(v);
-      if (!isNaN(n) && n > 0 && (original === null || n > original)) original = n;
+  let bestHasDecimal = false;
+  let bestRawString = null;
+  for (const v of saleCandidates) {
+    const { value: n, hasDecimalInSource, rawString } = parsePrice(v);
+    if (!isNaN(n) && n > 0) {
+      best = n;
+      bestHasDecimal = hasDecimalInSource;
+      bestRawString = rawString;
+      break;
     }
   }
 
-  // Normalize cents (Temu sometimes returns 1299 meaning $12.99)
-  if (best !== null && best > 100 && Number.isInteger(best)) best = best / 100;
-  if (original !== null && original > 100 && Number.isInteger(original)) original = original / 100;
+  // Find original price
+  let original = null;
+  let origHasDecimal = false;
+  let origRawString = null;
+  for (const v of originalCandidates) {
+    const { value: n, hasDecimalInSource, rawString } = parsePrice(v);
+    if (!isNaN(n) && n > 0) {
+      original = n;
+      origHasDecimal = hasDecimalInSource;
+      origRawString = rawString;
+      break;
+    }
+  }
+
+  // Normalize cents using smart logic with context
+  best = normalizeCents(best, bestHasDecimal, bestRawString, allParsed);
+  original = normalizeCents(original, origHasDecimal, origRawString, allParsed);
+
   // Validate range
   if (best !== null && (best < 0.01 || best > 99999)) best = null;
   if (original !== null && (original < 0.01 || original > 99999)) original = null;
+
+  // Don't return original if it equals or is less than sale price
+  if (original !== null && best !== null && original <= best) {
+    original = null;
+  }
+
   return { salePrice: best, originalPrice: original };
 }
 
@@ -471,11 +623,11 @@ async function scrapeTemuAllTabs() {
       };
       window.addEventListener('message', handler);
       window.postMessage({ type: '__JWL_CART_DATA_REQUEST__' }, '*');
-      // Timeout after 500ms
+      // Timeout after 1000ms (increased from 500ms for slower page contexts)
       setTimeout(() => {
         window.removeEventListener('message', handler);
         resolve([]);
-      }, 500);
+      }, 1000);
     });
 
     for (const entry of capturedData) {
@@ -511,7 +663,14 @@ async function scrapeTemuAllTabs() {
 
           // Prefer long_thumb_url (product photo) over thumb_url (may be sale banner).
           // item.image is an object on the cart API, so filter to strings only.
-          const imageCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          // Also check skc_list[0] for image fields (variant-specific images).
+          const skcItem = (item.skc_list || item.skcList)?.[0] || {};
+          const imageCandidates = [
+            item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl,
+            item.imageUrl, item.image_url, item.mainImage, item.primary_image, item.origin_image,
+            skcItem.long_thumb_url, skcItem.thumb_url, skcItem.thumbUrl, skcItem.image_url,
+            typeof item.image === 'string' ? item.image : null,
+          ];
           const image = imageCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           const { salePrice, originalPrice } = pickBestPrice(item);
 
@@ -521,14 +680,19 @@ async function scrapeTemuAllTabs() {
             : `https://www.temu.com/goods.html?goods_id=${productId}`;
           if (image) productUrl += (productUrl.includes('?') ? '&' : '?') + 'thumb_url=' + encodeURIComponent(image);
 
-          // Quantity: check skc_list[0].quantity, then direct fields
+          // Quantity: check skc_list[0].quantity, then direct fields (expanded field names)
           let qty = 1;
           const skcList = item.skc_list || item.skcList;
           if (Array.isArray(skcList) && skcList.length > 0) {
-            qty = parseInt(skcList[0].quantity || skcList[0].qty) || 1;
+            const skc = skcList[0];
+            qty = parseInt(skc.quantity || skc.qty || skc.num || skc.selected_quantity || skc.selectedQuantity) || 1;
           }
           if (qty <= 1) {
-            qty = Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1);
+            qty = Math.max(1, parseInt(
+              item.quantity || item.qty || item.num ||
+              item.selectedQuantity || item.selected_quantity ||
+              item.goods_quantity || item.goodsQuantity
+            ) || 1);
           }
 
           allItems.set(productId, {
@@ -590,7 +754,14 @@ async function scrapeTemuAllTabs() {
           const { salePrice, originalPrice } = pickBestPrice(item);
 
           // Filter to string URLs only (item.image can be an object on Temu's API)
-          const imgCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          // Also check skc_list[0] for variant-specific images
+          const jsSkcItem = (item.skc_list || item.skcList)?.[0] || {};
+          const imgCandidates = [
+            item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl,
+            item.imageUrl, item.image_url, item.mainImage, item.primary_image, item.origin_image,
+            jsSkcItem.long_thumb_url, jsSkcItem.thumb_url, jsSkcItem.thumbUrl, jsSkcItem.image_url,
+            typeof item.image === 'string' ? item.image : null,
+          ];
           const itemImage = imgCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           // Embed thumb_url in product URL for server-side image recovery
           let finalUrl = productUrl;
@@ -605,7 +776,11 @@ async function scrapeTemuAllTabs() {
             image_url: itemImage,
             price: salePrice,
             original_price: originalPrice,
-            quantity: Math.max(1, parseInt(item.quantity || item.qty) || 1),
+            quantity: Math.max(1, parseInt(
+              item.quantity || item.qty || item.num ||
+              item.selectedQuantity || item.selected_quantity ||
+              item.goods_quantity || item.goodsQuantity
+            ) || 1),
           });
         });
 
@@ -663,9 +838,19 @@ async function scrapeTemuAllTabs() {
               scriptUrl += '&thumb_url=' + encodeURIComponent(scriptImage);
             }
             // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
+            // Use smart heuristics: non-00 ending integers are likely cents
             let scriptPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
-            if (scriptPrice && scriptPrice > 100 && Number.isInteger(scriptPrice)) {
-              scriptPrice = scriptPrice / 100;
+            if (scriptPrice && Number.isInteger(scriptPrice) && scriptPrice >= 100) {
+              const lastTwoDigits = scriptPrice % 100;
+              // Non-zero ending (like 1299, 499) = definitely cents
+              // Zero ending but high value (>=10000) = likely cents ($100+)
+              if (lastTwoDigits !== 0 || scriptPrice >= 10000) {
+                scriptPrice = scriptPrice / 100;
+              }
+            }
+            // Validate price range
+            if (scriptPrice && (scriptPrice < 0.01 || scriptPrice > 99999)) {
+              scriptPrice = null;
             }
             allItems.set(goodsId, {
               product_id: goodsId,
@@ -891,12 +1076,34 @@ async function scrapeTemuAllTabs() {
           const parsed = allPriceMatches
             .map(p => parseFloat(p.replace(/[\$\s,]/g, '')))
             .filter(p => !isNaN(p) && p > 0.01 && p < 99999);
-          if (parsed.length === 1) {
-            price = parsed[0]; // Only one price visible = it's the price
-          } else if (parsed.length >= 2) {
+          // Deduplicate prices (same value appearing multiple times)
+          const uniquePrices = [...new Set(parsed)].sort((a, b) => a - b);
+          if (uniquePrices.length === 1) {
+            price = uniquePrices[0]; // Only one price visible = it's the price
+          } else if (uniquePrices.length === 2) {
             // Two prices: lower is sale, higher is original
-            price = Math.min(...parsed);
-            originalPrice = Math.max(...parsed);
+            // But sanity check: if lower price is suspiciously low (< $1)
+            // compared to higher (e.g., $0.99 shipping vs $15 item), skip the low one
+            const [low, high] = uniquePrices;
+            if (low < 1 && high > 5) {
+              // Low price is likely shipping, use high as product price
+              price = high;
+            } else {
+              price = low;
+              originalPrice = high;
+            }
+          } else if (uniquePrices.length > 2) {
+            // Multiple prices - try to find the most likely product price
+            // Filter out very low prices (likely shipping) and take the lowest remaining
+            const nonShipping = uniquePrices.filter(p => p >= 1);
+            if (nonShipping.length >= 1) {
+              price = nonShipping[0]; // Lowest non-shipping price
+              if (nonShipping.length >= 2) {
+                originalPrice = nonShipping[nonShipping.length - 1]; // Highest
+              }
+            } else {
+              price = uniquePrices[0]; // Fallback to lowest if all < $1
+            }
           }
         }
 
@@ -907,17 +1114,66 @@ async function scrapeTemuAllTabs() {
         }
       }
 
-      // Get quantity
+      // Get quantity (validate it's reasonable) - check multiple element types
       let quantity = 1;
-      const qtyEl = container?.querySelector('input[type="text"], input[value], input[type="number"]');
-      if (qtyEl) {
-        quantity = parseInt(qtyEl.value) || 1;
+      if (container) {
+        // Method 1: Input elements (text, number)
+        const qtyInput = container.querySelector('input[type="text"], input[type="number"], input[name*="quantity"], input[name*="qty"]');
+        if (qtyInput) {
+          const parsedQty = parseInt(qtyInput.value);
+          if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+            quantity = parsedQty;
+          }
+        }
+
+        // Method 2: Select dropdowns
+        if (quantity === 1) {
+          const qtySelect = container.querySelector('select[name*="quantity"], select[name*="qty"], select[class*="quantity"], select[class*="qty"]');
+          if (qtySelect) {
+            const parsedQty = parseInt(qtySelect.value);
+            if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+              quantity = parsedQty;
+            }
+          }
+        }
+
+        // Method 3: Stepper widgets (span/div with quantity between +/- buttons)
+        if (quantity === 1) {
+          const stepperSelectors = [
+            '[class*="quantity"] span', '[class*="qty"] span',
+            '[class*="Quantity"] span', '[class*="stepper"] span',
+            '[class*="counter"] span', '[class*="amount"] span',
+            '[aria-label*="quantity"]', '[data-testid*="quantity"]',
+          ];
+          for (const sel of stepperSelectors) {
+            const el = container.querySelector(sel);
+            if (el) {
+              const text = el.textContent?.trim();
+              // Match a standalone number (the quantity display)
+              if (text && /^\d+$/.test(text)) {
+                const parsedQty = parseInt(text);
+                if (parsedQty > 0 && parsedQty < 1000) {
+                  quantity = parsedQty;
+                  break;
+                }
+              }
+            }
+          }
+        }
       }
 
       // Embed thumb_url in product URL for server-side image recovery
       let domProductUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
       if (imageUrl) {
         domProductUrl += '&thumb_url=' + encodeURIComponent(imageUrl);
+      }
+
+      // Final validation of price/originalPrice bounds
+      if (price !== null && (isNaN(price) || price < 0.01 || price > 99999)) {
+        price = null;
+      }
+      if (originalPrice !== null && (isNaN(originalPrice) || originalPrice < 0.01 || originalPrice > 99999)) {
+        originalPrice = null;
       }
 
       items.push({
@@ -1426,33 +1682,81 @@ function scrapeCartItems(store) {
     // Amazon cart scraping
     const cartItems = document.querySelectorAll('[data-asin]');
     const seen = new Set();
+    let stats = { total: 0, withImage: 0, withPrice: 0, withTitle: 0 };
 
     cartItems.forEach(item => {
       const asin = item.dataset.asin;
-      if (!asin || asin.length !== 10 || seen.has(asin)) return;
+      // ASIN can be 10 chars (B0xxxxxxxxx) or other formats - just check it exists and is alphanumeric
+      if (!asin || asin.length < 5 || !/^[A-Z0-9]+$/i.test(asin) || seen.has(asin)) return;
       seen.add(asin);
+      stats.total++;
 
       // Get title
       const titleEl = item.querySelector('.sc-product-title, .a-truncate-cut, a[href*="/dp/"]');
       let title = titleEl?.textContent?.trim() || 'Unknown Product';
+      if (title && title.length > 5) stats.withTitle++;
 
       // Get image
       const img = item.querySelector('.sc-product-image img, img[src*="images-amazon"]');
       const imageUrl = img?.src || null;
+      if (imageUrl) stats.withImage++;
 
-      // Get price
+      // Get price (current and original for sale detection)
       let price = null;
-      const priceEl = item.querySelector('.sc-product-price, .sc-price, .a-price .a-offscreen');
-      if (priceEl) {
-        const priceText = priceEl.textContent?.replace(/[^0-9.]/g, '');
-        price = parseFloat(priceText) || null;
+      let originalPrice = null;
+
+      // Amazon shows prices in various formats - look for both current and "was" prices
+      // Current price selectors (sale price or regular price)
+      const currentPriceSelectors = [
+        '.sc-product-price',
+        '.sc-price',
+        '.a-price:not([data-a-strike]) .a-offscreen',
+        '.a-color-price',
+      ];
+      // Original/was price selectors (strikethrough prices)
+      const originalPriceSelectors = [
+        '.a-price[data-a-strike] .a-offscreen',
+        '.a-text-strike .a-offscreen',
+        '.a-text-strike',
+        '.a-price-was .a-offscreen',
+      ];
+
+      // Try to get current price
+      for (const sel of currentPriceSelectors) {
+        const el = item.querySelector(sel);
+        if (el) {
+          const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+          const parsed = parseFloat(priceText);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
+            price = parsed;
+            stats.withPrice++;
+            break;
+          }
+        }
+      }
+
+      // Try to get original price (strikethrough/was price)
+      for (const sel of originalPriceSelectors) {
+        const el = item.querySelector(sel);
+        if (el) {
+          const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+          const parsed = parseFloat(priceText);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 100000 && parsed > (price || 0)) {
+            originalPrice = parsed;
+            break;
+          }
+        }
       }
 
       // Get quantity
       let quantity = 1;
       const qtyEl = item.querySelector('.sc-quantity-textfield, select[name*="quantity"], input[name*="quantity"]');
       if (qtyEl) {
-        quantity = parseInt(qtyEl.value) || 1;
+        const parsedQty = parseInt(qtyEl.value);
+        // Validate quantity is reasonable
+        if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+          quantity = parsedQty;
+        }
       }
 
       items.push({
@@ -1461,9 +1765,14 @@ function scrapeCartItems(store) {
         title: title,
         image_url: imageUrl,
         price: price,
+        original_price: originalPrice,
         quantity: quantity,
       });
     });
+
+    // Attach stats for consistent reporting
+    stats.method = 'dom_scraping';
+    items._stats = stats;
   }
 
   return items;
@@ -1544,21 +1853,49 @@ async function importFromShareLink() {
 
     elements.shareImportBtn.textContent = `Importing ${items.length} items...`;
 
-    // Send to wishlist app
-    const listId = parseInt(elements.shareListSelect.value);
-    const response = await fetch(`${API_BASE}/api/items/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        store: 'temu',
-        items: items,
-        list_id: listId,
-      }),
-    });
+    // Send to wishlist app with retry logic
+    const listId = parseInt(elements.shareListSelect.value) || 1;
+    let response;
+    let lastError;
 
-    if (!response.ok) throw new Error('Failed to import items');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        response = await fetch(`${API_BASE}/api/items/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            store: 'temu',
+            items: items,
+            list_id: listId,
+          }),
+          signal: AbortSignal.timeout(30000), // 30 second timeout
+        });
+        if (response.ok) {
+          lastError = null;
+          break;
+        } else {
+          lastError = new Error(`Server error: ${response.status}`);
+        }
+      } catch (e) {
+        lastError = e;
+        console.warn(`[Judi's Wishlist] Share import attempt ${attempt} failed:`, e.message);
+      }
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, attempt * 2000));
+        elements.shareImportBtn.textContent = `Retrying (${attempt}/3)...`;
+      }
+    }
 
-    const data = await response.json();
+    if (lastError || !response?.ok) {
+      throw new Error(lastError?.message || 'Failed to import items after 3 attempts');
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error('Invalid response from server')
+    }
     const scrapeStats = items._stats || null;
 
     // Build result message
@@ -1667,54 +2004,44 @@ async function pasteFromClipboard() {
 // Refresh images: scrape cart for images and push to server
 async function refreshImages() {
   elements.refreshImagesBtn.disabled = true;
-  elements.refreshImagesBtn.textContent = '🖼️ Scanning cart for images...';
+  elements.refreshImagesBtn.textContent = '🖼️ Opening product pages...';
   elements.refreshResult.classList.add('hidden');
 
   try {
-    // Re-use the existing scraper to get items with images
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      func: currentStore.key === 'temu' ? scrapeTemuAllTabs : scrapeCartItems,
-      args: [currentStore.key],
-    });
+    // Tell background to open every product page and grab images
+    chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START', mode: 'all' });
 
-    const items = results[0]?.result || [];
-    if (items.length === 0) {
-      elements.refreshResult.textContent = 'No items found on cart page.';
-      elements.refreshResult.className = 'result error';
-      elements.refreshResult.classList.remove('hidden');
-      return;
-    }
-
-    // Build updates: extract goods_id from product_url and pair with image
-    const updates = [];
-    for (const item of items) {
-      if (!item.image_url || !item.product_url) continue;
-      const match = item.product_url.match(/goods_id=(\d+)/);
-      if (!match) continue;
-      updates.push({ goods_id: match[1], image_url: item.image_url });
-    }
-
-    elements.refreshImagesBtn.textContent = `🖼️ Pushing ${updates.length} images...`;
-
-    const response = await fetch(`${API_BASE}/api/items/update-images`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates }),
-    });
-
-    if (!response.ok) throw new Error('Server error');
-
-    const data = await response.json();
-    elements.refreshResult.textContent = `Updated ${data.updated} of ${data.total} images`;
+    elements.refreshResult.textContent = 'Opening product pages to grab images...';
     elements.refreshResult.className = 'result success';
     elements.refreshResult.classList.remove('hidden');
+
+    // Poll for status
+    const poll = () => {
+      chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
+        if (!status) return;
+
+        const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+        elements.refreshResult.textContent = `${status.processed}/${status.total} — ${status.updated} updated${status.current ? ' — ' + status.current : ''}`;
+        elements.refreshImagesBtn.textContent = `🖼️ ${pct}% (${status.processed}/${status.total})`;
+
+        if (status.running) {
+          setTimeout(poll, 2000);
+        } else {
+          elements.refreshImagesBtn.disabled = false;
+          elements.refreshImagesBtn.textContent = '🖼️ Refresh All Images';
+          let doneMsg = `Done! Updated ${status.updated} images, ${status.failed} failed`;
+          if (status.skipped > 0) doneMsg += `, ${status.skipped} already correct`;
+          doneMsg += ` out of ${status.total}`;
+          elements.refreshResult.textContent = doneMsg;
+        }
+      });
+    };
+    setTimeout(poll, 3000);
   } catch (error) {
     console.error('Image refresh failed:', error);
     elements.refreshResult.textContent = 'Failed: ' + error.message;
     elements.refreshResult.className = 'result error';
     elements.refreshResult.classList.remove('hidden');
-  } finally {
     elements.refreshImagesBtn.disabled = false;
     elements.refreshImagesBtn.textContent = '🖼️ Refresh All Images';
   }
@@ -1730,93 +2057,57 @@ elements.shareImportBtn.addEventListener('click', importFromShareLink);
 elements.sharePasteBtn.addEventListener('click', pasteFromClipboard);
 elements.refreshImagesBtn.addEventListener('click', refreshImages);
 elements.fixImagesBtn.addEventListener('click', fixMissingImages);
+elements.cancelFixBtn.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'FIX_IMAGES_CANCEL' }, () => {
+    elements.cancelFixBtn.classList.add('hidden');
+    elements.fixImagesStatus.textContent += ' (cancelling...)';
+  });
+});
 
 async function fixMissingImages() {
   elements.fixImagesBtn.disabled = true;
-  elements.fixImagesBtn.textContent = '🔧 Scrolling cart to load all items...';
+  elements.fixImagesBtn.textContent = '🔧 Starting...';
+  elements.cancelFixBtn.classList.remove('hidden');
   elements.fixImagesStatus.classList.remove('hidden');
-  elements.fixImagesStatus.textContent = 'Scrolling through cart page to find all images...';
+  elements.fixImagesStatus.textContent = 'Opening product pages to grab images...';
 
   try {
-    // Step 1: Scrape the cart page the user is already on.
-    // This is the most reliable source — the images are RIGHT THERE on screen.
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: currentTabId },
-      func: currentStore.key === 'temu' ? scrapeTemuAllTabs : scrapeCartItems,
-      args: [currentStore.key],
-    });
+    // Tell background to open each product page with a bad/missing image
+    chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START', mode: 'needs-fix' });
 
-    const cartItems = results[0]?.result || [];
-    elements.fixImagesBtn.textContent = `🔧 Found ${cartItems.length} items, pushing images...`;
+    // Poll for status
+    const poll = () => {
+      chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
+        if (!status) return;
 
-    // Step 2: Build image updates from cart scrape — match by goods_id
-    const updates = [];
-    for (const item of cartItems) {
-      if (!item.image_url || !item.product_url) continue;
-      const match = item.product_url.match(/goods_id=(\d+)/);
-      if (!match) continue;
-      updates.push({ goods_id: match[1], image_url: item.image_url });
-    }
+        const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
+        elements.fixImagesStatus.textContent = `${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.skipped ? ', ' + status.skipped + ' already correct' : ''}${status.current ? ' — ' + status.current : ''}`;
+        elements.fixImagesBtn.textContent = `🔧 ${pct}% (${status.processed}/${status.total})`;
 
-    let cartFixed = 0;
-    if (updates.length > 0) {
-      const response = await fetch(`${API_BASE}/api/items/update-images`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ updates }),
+        if (status.running) {
+          setTimeout(poll, 2000);
+        } else {
+          elements.fixImagesBtn.disabled = false;
+          elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
+          elements.cancelFixBtn.classList.add('hidden');
+          if (status.total === 0) {
+            elements.fixImagesStatus.textContent = 'All items already have valid images!';
+          } else {
+            let doneMsg = `Done! Fixed ${status.updated} images, ${status.failed} failed`;
+            if (status.skipped > 0) doneMsg += `, ${status.skipped} already correct`;
+            doneMsg += ` out of ${status.total}`;
+            elements.fixImagesStatus.textContent = doneMsg;
+          }
+        }
       });
-      if (response.ok) {
-        const data = await response.json();
-        cartFixed = data.updated || 0;
-      }
-    }
+    };
 
-    elements.fixImagesStatus.textContent = `Cart scan: updated ${cartFixed} of ${updates.length} images from cart page.`;
-
-    // Step 3: Check if there are still items needing images, use background tabs for those
-    const needsResp = await fetch(`${API_BASE}/api/items/needs-images`);
-    if (needsResp.ok) {
-      const needsData = await needsResp.json();
-      const remaining = needsData.count || 0;
-      const autoFixed = needsData.auto_fixed || 0;
-
-      if (remaining > 0) {
-        elements.fixImagesStatus.textContent = `Cart scan fixed ${cartFixed} images (${autoFixed} auto-fixed). ${remaining} still need images — opening product pages...`;
-
-        // Start background tab scraping for remaining items
-        chrome.runtime.sendMessage({ type: 'FIX_IMAGES_START' });
-
-        const poll = () => {
-          chrome.runtime.sendMessage({ type: 'FIX_IMAGES_STATUS' }, (status) => {
-            if (!status) return;
-
-            const pct = status.total > 0 ? Math.round((status.processed / status.total) * 100) : 0;
-            elements.fixImagesStatus.textContent = `Cart: ${cartFixed} fixed | Tabs: ${status.processed}/${status.total} checked — ${status.updated} fixed, ${status.failed} failed${status.current ? ' — ' + status.current : ''}`;
-            elements.fixImagesBtn.textContent = `🔧 ${pct}% (${status.processed}/${status.total})`;
-
-            if (status.running) {
-              setTimeout(poll, 2000);
-            } else {
-              elements.fixImagesBtn.disabled = false;
-              elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
-              elements.fixImagesStatus.textContent = `Done! Cart: ${cartFixed} fixed. Tabs: ${status.updated} fixed, ${status.failed} failed.`;
-            }
-          });
-        };
-        setTimeout(poll, 3000);
-      } else {
-        elements.fixImagesBtn.disabled = false;
-        elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
-        elements.fixImagesStatus.textContent = `All done! ${cartFixed} images updated from cart page${autoFixed ? `, ${autoFixed} auto-fixed from saved data` : ''}.`;
-      }
-    } else {
-      elements.fixImagesBtn.disabled = false;
-      elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
-    }
+    setTimeout(poll, 3000);
   } catch (error) {
     elements.fixImagesStatus.textContent = 'Error: ' + error.message;
     elements.fixImagesBtn.disabled = false;
     elements.fixImagesBtn.textContent = '🔧 Fix Missing Images';
+    elements.cancelFixBtn.classList.add('hidden');
   }
 }
 

@@ -1,8 +1,11 @@
+import logging
 from flask import Blueprint, jsonify, request
 from models.item import Item
 from models.category import Category
 import requests
 import re
+
+logger = logging.getLogger(__name__)
 import time
 import threading
 from datetime import datetime
@@ -31,7 +34,8 @@ def is_valid_product_image(url):
         if pattern in url_lower:
             return False
     # Must be from a known CDN with product-like path
-    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront']):
+    # Includes Temu CDNs (kwcdn, akamaized, temu) and Amazon CDNs (media-amazon, images-amazon)
+    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront', 'cdn', 'img.', 'media-amazon', 'images-amazon']):
         return False
     # Product images typically have dimensions or product identifiers
     # Very short URLs are suspicious
@@ -73,13 +77,69 @@ def extract_goods_id(url):
     return None
 
 
+def normalize_price_cents(price):
+    """
+    Server-side safety net for cent normalization.
+    Detects if a price value is likely in cents and converts to dollars.
+    Uses conservative heuristics to avoid false positives.
+    """
+    if price is None:
+        return None
+    try:
+        val = float(price)
+    except (ValueError, TypeError):
+        return None
+
+    # If it's already a float with decimals, it's in dollars
+    if val != int(val):
+        return val
+
+    val = int(val)
+
+    # Reject obviously invalid values
+    if val < 0:
+        return None
+
+    # Small values (< 100) are definitely dollars (prices $0-$99)
+    if val < 100:
+        return float(val)
+
+    # For integers >= 100, use heuristics to detect cents
+    # Key insight: cent values rarely end in 00 (e.g., 15000 for $150.00 is rare)
+    # Dollar values often are round numbers ($150, $200, $500)
+    last_two_digits = val % 100
+
+    # Non-zero ending (like 1299, 499, 199) = definitely cents
+    if last_two_digits != 0:
+        as_dollars = val / 100
+        # Sanity check: result should be a reasonable product price
+        if 0.50 <= as_dollars <= 9999:
+            return as_dollars
+
+    # Values ending in 00: only treat as cents if very high (>=10000 = $100+)
+    # This avoids converting $100, $200, $500 incorrectly
+    if last_two_digits == 0 and val >= 10000:
+        return val / 100
+
+    # Default: assume it's already in dollars
+    return float(val)
+
+
 def ensure_thumb_url(product_url, image_url):
     """Ensure product_url has thumb_url parameter for server-side image recovery."""
     if not product_url or not image_url:
         return product_url
-    if 'thumb_url=' in (product_url or ''):
+    if 'thumb_url=' in product_url:
+        return product_url
+    # Validate image_url is actually a URL
+    if not image_url.startswith('http'):
         return product_url
     from urllib.parse import quote
+    # Handle URL fragments correctly: query params must come before fragment
+    if '#' in product_url:
+        base, fragment = product_url.split('#', 1)
+        separator = '&' if '?' in base else '?'
+        return f"{base}{separator}thumb_url={quote(image_url, safe='')}#{fragment}"
     separator = '&' if '?' in product_url else '?'
     return f"{product_url}{separator}thumb_url={quote(image_url, safe='')}"
 
@@ -91,13 +151,17 @@ _last_scrape_time = 0
 
 
 def rate_limit_scrape():
-    """Ensure we don't hit Temu too fast."""
+    """Ensure we don't hit Temu too fast. Does not block other threads while sleeping."""
     global _last_scrape_time
+    # Calculate sleep time while holding lock, then release before sleeping
     with _scrape_lock:
         elapsed = time.time() - _last_scrape_time
-        if elapsed < SCRAPE_DELAY:
-            time.sleep(SCRAPE_DELAY - elapsed)
-        _last_scrape_time = time.time()
+        sleep_time = max(0, SCRAPE_DELAY - elapsed)
+        # Reserve our slot by updating the time now
+        _last_scrape_time = time.time() + sleep_time
+    # Sleep outside the lock so other threads aren't blocked
+    if sleep_time > 0:
+        time.sleep(sleep_time)
 
 
 def retry_on_failure(max_retries=3, delay=2):
@@ -177,7 +241,7 @@ def get_items():
 @items_bp.route('', methods=['POST'])
 def create_item():
     """Create a new item."""
-    data = request.get_json()
+    data = request.get_json() or {}
 
     required = ['store', 'product_id', 'product_url', 'title']
     for field in required:
@@ -212,14 +276,38 @@ def get_item(item_id):
 
 @items_bp.route('/<int:item_id>', methods=['PATCH'])
 def update_item(item_id):
-    """Update an item."""
-    data = request.get_json()
+    """Update an item. Handles both web app updates and extension image pushes."""
+    data = request.get_json() or {}
+    existing = Item.get_by_id(item_id)
+    if not existing:
+        return jsonify({'error': 'Item not found'}), 404
+
+    # Validate quantity if provided - must be 1-9999
+    if 'quantity' in data:
+        try:
+            qty = int(data['quantity'])
+            data['quantity'] = max(1, min(9999, qty))  # Clamp to valid range
+        except (ValueError, TypeError):
+            data['quantity'] = 1  # Default on invalid input
+
+    # Validate image_url if provided — reject placeholders/bad patterns
+    if 'image_url' in data:
+        new_img = data['image_url']
+        if isinstance(new_img, str) and new_img.startswith('http') and is_valid_product_image(new_img):
+            data['image_url'] = new_img
+            # Embed thumb_url in product_url for future recovery
+            current_url = existing.get('product_url', '')
+            if current_url and 'thumb_url=' not in current_url:
+                data['product_url'] = ensure_thumb_url(current_url, new_img)
+        else:
+            # Don't save a bad image — remove it from the update
+            del data['image_url']
 
     # Track price changes
-    if 'current_price' in data:
-        existing = Item.get_by_id(item_id)
-        if existing and existing.get('current_price') != data['current_price']:
-            data['last_price'] = existing.get('current_price')
+    if 'current_price' in data and data['current_price'] is not None:
+        old_price = existing.get('current_price')
+        if old_price is not None and old_price != data['current_price']:
+            data['last_price'] = old_price
             data['price_updated_at'] = datetime.now().isoformat()
 
     item = Item.update(item_id, **data)
@@ -240,14 +328,20 @@ def delete_item(item_id):
 @items_bp.route('/batch', methods=['POST'])
 def batch_operations():
     """Perform batch operations on multiple items."""
-    data = request.get_json()
+    data = request.get_json() or {}
     operation = data.get('operation')
     item_ids = data.get('item_ids', [])
 
     if not operation:
         return jsonify({'error': 'operation is required'}), 400
-    if not item_ids:
-        return jsonify({'error': 'item_ids is required'}), 400
+    if not item_ids or not isinstance(item_ids, list):
+        return jsonify({'error': 'item_ids list is required'}), 400
+
+    # Validate all IDs are integers
+    try:
+        item_ids = [int(i) for i in item_ids]
+    except (ValueError, TypeError):
+        return jsonify({'error': 'item_ids must contain integers'}), 400
 
     results = {'success': 0, 'failed': 0, 'errors': []}
 
@@ -324,11 +418,17 @@ def batch_operations():
 @items_bp.route('/reorder', methods=['POST'])
 def reorder_items():
     """Bulk update item positions."""
-    data = request.get_json()
+    data = request.get_json() or {}
     positions = data.get('positions', {})
 
-    # Convert string keys to int
-    positions = {int(k): v for k, v in positions.items()}
+    if not positions or not isinstance(positions, dict):
+        return jsonify({'error': 'positions dict is required'}), 400
+
+    # Convert string keys to int safely
+    try:
+        positions = {int(k): int(v) for k, v in positions.items()}
+    except (ValueError, TypeError):
+        return jsonify({'error': 'positions must be {item_id: position} with numeric values'}), 400
 
     Item.reorder(positions)
     return jsonify({'success': True})
@@ -360,11 +460,9 @@ def get_stats():
     """Get item statistics for dashboard."""
     stats = Item.get_stats()
 
-    # Add missing data counts
-    items = Item.get_all()
-    stats['missing_image'] = len([i for i in items if not has_valid_image(i)])
-    stats['missing_price'] = len([i for i in items if i.get('current_price') is None])
-    stats['missing_any'] = len([i for i in items if not has_valid_image(i) or i.get('current_price') is None])
+    # Derive missing_any from SQL-level counts (no need to load all items)
+    stats['missing_image'] = stats.get('missing_images', 0)
+    stats['missing_any'] = stats['missing_image'] + stats.get('missing_price', 0)
 
     return jsonify(stats)
 
@@ -422,16 +520,35 @@ def export_items():
     })
 
 
+@items_bp.route('/backup', methods=['POST'])
+def create_backup():
+    """Create a database backup on demand."""
+    from database import backup_db
+    try:
+        path = backup_db()
+        return jsonify({'success': True, 'path': path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""
-    data = request.get_json()
+    data = request.get_json() or {}
     store = data.get('store')
     items_data = data.get('items', [])
     list_id = data.get('list_id', 1)
 
     if not store:
         return jsonify({'error': 'store is required'}), 400
+
+    if not isinstance(items_data, list):
+        return jsonify({'error': 'items must be an array'}), 400
+
+    # Validate list_id exists (use 1 if not found)
+    from models.list import List
+    if List.get_by_id(list_id) is None:
+        list_id = 1
 
     results = []
     imported = 0
@@ -452,7 +569,34 @@ def import_items():
                 continue
             product_id = str(product_id)
 
-            new_price = item_data.get('price')
+            # Validate and sanitize price (with cent normalization safety net)
+            raw_price = item_data.get('price')
+            new_price = normalize_price_cents(raw_price)
+            # Final validation: reject out-of-range prices
+            if new_price is not None and (new_price < 0.01 or new_price > 99999):
+                new_price = None
+
+            # Validate and sanitize quantity
+            raw_qty = item_data.get('quantity', 1)
+            try:
+                quantity = int(raw_qty)
+                if quantity < 1:
+                    quantity = 1
+                elif quantity > 9999:
+                    quantity = 9999
+            except (ValueError, TypeError):
+                quantity = 1
+
+            # Validate image URL
+            raw_image = item_data.get('image_url')
+            image_url = None
+            if raw_image and isinstance(raw_image, str) and raw_image.startswith('http'):
+                if is_valid_product_image(raw_image):
+                    image_url = raw_image
+
+            # Sanitize title (limit length, strip whitespace)
+            raw_title = item_data.get('title', 'Unknown Product')
+            title = str(raw_title).strip()[:500] if raw_title else 'Unknown Product'
 
             # Check for existing item
             existing = Item.get_by_product(store, product_id)
@@ -467,20 +611,21 @@ def import_items():
                         current_price=new_price,
                         price_updated_at=datetime.now().isoformat()
                     )
-                    # Update image if extension has a better one
-                    ext_img = item_data.get('image_url')
-                    if ext_img and isinstance(ext_img, str) and ext_img.startswith('http'):
-                        if not existing.get('image_url') or ext_img != existing.get('image_url'):
-                            price_update['image_url'] = ext_img
+                    # Update image if we have a valid one and it's different
+                    if image_url and (not existing.get('image_url') or image_url != existing.get('image_url')):
+                        price_update['image_url'] = image_url
                     # Backfill thumb_url into product_url if missing
                     ex_url = existing.get('product_url', '')
-                    ex_img = ext_img or existing.get('image_url')
+                    ex_img = image_url or existing.get('image_url')
                     if ex_img and 'thumb_url=' not in (ex_url or ''):
                         price_update['product_url'] = ensure_thumb_url(ex_url, ex_img)
                     Item.update(existing['id'], **price_update)
                     results.append({
                         'id': existing['id'],
                         'product_id': product_id,
+                        'product_url': existing.get('product_url', ''),
+                        'image_url': existing.get('image_url', ''),
+                        'title': existing.get('title', ''),
                         'status': 'updated',
                         'old_price': old_price,
                         'new_price': new_price
@@ -495,17 +640,15 @@ def import_items():
                 else:
                     # No price change - but update image if missing/bad, set original_price if unset
                     reimport_updates = {}
-                    ext_image = item_data.get('image_url')
-                    if ext_image and isinstance(ext_image, str) and ext_image.startswith('http'):
-                        cur_image = existing.get('image_url', '')
-                        # Always prefer extension image - it comes from Temu's live API
-                        if not cur_image or ext_image != cur_image:
-                            reimport_updates['image_url'] = ext_image
+                    cur_image = existing.get('image_url', '')
+                    # Update image if we have a valid one and it's different/better
+                    if image_url and (not cur_image or image_url != cur_image):
+                        reimport_updates['image_url'] = image_url
                     if existing.get('original_price') is None and new_price is not None:
                         reimport_updates['original_price'] = new_price
                     # Backfill thumb_url into product_url if missing
                     existing_url = existing.get('product_url', '')
-                    backfill_image = item_data.get('image_url') or existing.get('image_url')
+                    backfill_image = image_url or existing.get('image_url')
                     if backfill_image and 'thumb_url=' not in (existing_url or ''):
                         reimport_updates['product_url'] = ensure_thumb_url(existing_url, backfill_image)
                     if reimport_updates:
@@ -514,6 +657,9 @@ def import_items():
                     results.append({
                         'id': existing['id'],
                         'product_id': product_id,
+                        'product_url': existing.get('product_url', ''),
+                        'image_url': existing.get('image_url', ''),
+                        'title': existing.get('title', ''),
                         'status': 'skipped'
                     })
                     skipped += 1
@@ -521,35 +667,47 @@ def import_items():
 
             # Create new item - ensure thumb_url is embedded in product_url
             import_url = item_data.get('product_url', '')
-            import_image = item_data.get('image_url')
-            import_url = ensure_thumb_url(import_url, import_image)
+            import_url = ensure_thumb_url(import_url, image_url)
+
+            # Validate original_price if provided (with cent normalization)
+            ext_original = item_data.get('original_price')
+            original_price = normalize_price_cents(ext_original)
+            if original_price is not None and (original_price < 0.01 or original_price > 99999):
+                original_price = None
+
+            # Context-aware fix: if original_price is suspiciously large compared to new_price,
+            # it might be cents that normalize_price_cents missed (e.g., 1500 = $15.00)
+            # If original_price / 100 is still >= new_price, treat original as cents
+            if (original_price is not None and new_price is not None and
+                original_price > new_price * 10 and  # Way larger than sale price
+                original_price / 100 >= new_price):   # Divided value still makes sense
+                original_price = original_price / 100
+
+            # Auto-categorize based on title keywords
+            cat_id = categorize_item_title(title, all_categories)
 
             item = Item.create(
                 store=store,
                 product_id=product_id,
                 product_url=import_url,
-                title=item_data.get('title', 'Unknown Product'),
-                image_url=import_image,
+                title=title,
+                image_url=image_url,
                 current_price=new_price,
-                quantity=item_data.get('quantity', 1),
-                list_id=list_id
+                quantity=quantity,
+                list_id=list_id,
+                category_id=cat_id or 1
             )
 
-            # If extension sent a separate original_price (higher than sale),
-            # update it so price drop display works correctly
-            ext_original = item_data.get('original_price')
-            if ext_original and new_price and ext_original > new_price:
-                Item.update(item['id'], original_price=ext_original)
-
-            # Auto-categorize based on title keywords
-            title = item_data.get('title', '')
-            cat_id = categorize_item_title(title, all_categories)
-            if cat_id:
-                Item.update(item['id'], category_id=cat_id)
+            # Apply original_price if it's higher than sale price
+            if original_price and new_price and original_price > new_price:
+                Item.update(item['id'], original_price=original_price)
 
             results.append({
                 'id': item['id'],
                 'product_id': product_id,
+                'product_url': import_url,
+                'image_url': image_url,
+                'title': title,
                 'status': 'imported'
             })
             imported += 1
@@ -666,18 +824,13 @@ def scrape_temu_product(url):
 
                                 # Use sale price if available, otherwise fall back to price
                                 price_val = sale_val or orig_val
-                                if price_val:
-                                    p = float(price_val)
-                                    if p > 100 and '.' not in str(price_val):
-                                        p = p / 100
-                                    if 0.01 <= p <= 9999:
-                                        data['price'] = round(p, 2)
+                                p = normalize_price_cents(price_val)
+                                if p is not None and 0.01 <= p <= 9999:
+                                    data['price'] = round(p, 2)
                                 # Also store original price if both exist
                                 if sale_val and orig_val:
-                                    op = float(orig_val)
-                                    if op > 100 and '.' not in str(orig_val):
-                                        op = op / 100
-                                    if 0.01 <= op <= 9999:
+                                    op = normalize_price_cents(orig_val)
+                                    if op is not None and 0.01 <= op <= 9999:
                                         data['original_price'] = round(op, 2)
                 except (ValueError, KeyError):
                     pass
@@ -709,7 +862,7 @@ def scrape_temu_product(url):
                         try:
                             if '\\u' in title:
                                 title = title.encode().decode('unicode_escape')
-                        except:
+                        except (UnicodeDecodeError, UnicodeEncodeError):
                             pass
                         title = title.strip()
                         if len(title) > 5 and len(title) < 500 and 'Temu' not in title:
@@ -758,15 +911,10 @@ def scrape_temu_product(url):
                 for pattern in price_patterns:
                     matches = re.findall(pattern, html)
                     for match in matches:
-                        try:
-                            price = float(match)
-                            if price > 100 and '.' not in str(match):
-                                price = price / 100
-                            if 0.01 <= price <= 9999:
-                                data['price'] = round(price, 2)
-                                break
-                        except ValueError:
-                            continue
+                        price = normalize_price_cents(match)
+                        if price is not None and 0.01 <= price <= 9999:
+                            data['price'] = round(price, 2)
+                            break
                     if 'price' in data:
                         break
         except Exception:
@@ -802,6 +950,12 @@ def refresh_item(item_id):
         return jsonify({'error': f'Refresh not supported for store: {store}'}), 400
 
     if not scraped:
+        # Track consecutive scrape failures — auto-mark unavailable after 3
+        fail_count = (item.get('scrape_fail_count') or 0) + 1
+        fail_updates = {'scrape_fail_count': fail_count, 'last_checked': datetime.now().isoformat()}
+        if fail_count >= 3:
+            fail_updates['is_unavailable'] = 1
+        Item.update(item_id, **fail_updates)
         return jsonify({'error': 'Could not fetch product data. The page may be unavailable or the product removed.'}), 500
 
     # Update item with scraped data - update ALL fields, not just missing ones
@@ -846,8 +1000,11 @@ def refresh_item(item_id):
             updates['title'] = scraped['title']
             updated_fields.append('title')
 
-    # Track last refresh time
+    # Track last refresh time and reset fail counter on success
     updates['last_checked'] = datetime.now().isoformat()
+    updates['scrape_fail_count'] = 0
+    if item.get('is_unavailable') and scraped:
+        updates['is_unavailable'] = 0  # Product is back!
 
     if len(updated_fields) > 0:
         updated_item = Item.update(item_id, **updates)
@@ -1291,37 +1448,6 @@ def needs_images():
     return jsonify({ 'items': needs, 'count': len(needs), 'auto_fixed': auto_fixed })
 
 
-@items_bp.route('/<int:item_id>', methods=['PATCH'])
-def patch_item(item_id):
-    """Update specific fields on an item (used by extension to push scraped images)."""
-    item = Item.get_by_id(item_id)
-    if not item:
-        return jsonify({'error': 'Item not found'}), 404
-
-    data = request.get_json() or {}
-    updates = {}
-
-    if 'image_url' in data:
-        new_img = data['image_url']
-        if isinstance(new_img, str) and new_img.startswith('http') and is_valid_product_image(new_img):
-            updates['image_url'] = new_img
-            # Also embed thumb_url in product_url for future recovery
-            current_url = item.get('product_url', '')
-            if current_url and 'thumb_url=' not in current_url:
-                updates['product_url'] = ensure_thumb_url(current_url, new_img)
-
-    if 'title' in data and data['title']:
-        updates['title'] = data['title']
-
-    if 'current_price' in data and data['current_price'] is not None:
-        updates['current_price'] = float(data['current_price'])
-
-    if not updates:
-        return jsonify({'error': 'No valid fields to update'}), 400
-
-    updated = Item.update(item_id, **updates)
-    return jsonify({'success': True, 'item': updated})
-
 
 @items_bp.route('/bad-images', methods=['GET'])
 def list_bad_images():
@@ -1477,11 +1603,10 @@ def update_images():
         # Update image and also embed thumb_url in product_url for future refreshes
         item_updates = {'image_url': new_image, 'last_checked': datetime.now().isoformat()}
 
-        # Update product_url to include thumb_url if not already there
+        # Update product_url to include thumb_url if not already there (use ensure_thumb_url for proper formatting)
         product_url = item.get('product_url', '')
-        if 'thumb_url=' not in product_url:
-            from urllib.parse import urlencode, quote
-            item_updates['product_url'] = product_url + '&thumb_url=' + quote(new_image, safe='')
+        if product_url and 'thumb_url=' not in product_url:
+            item_updates['product_url'] = ensure_thumb_url(product_url, new_image)
 
         Item.update(item['id'], **item_updates)
         updated += 1
@@ -1578,9 +1703,14 @@ def check_prices():
 @items_bp.route('/import-link', methods=['POST'])
 def import_from_link():
     """Import a single item from a Temu product URL."""
-    data = request.get_json()
+    data = request.get_json() or {}
     url = (data.get('url') or '').strip()
     list_id = data.get('list_id', 1)
+
+    # Validate list_id exists (use 1 if not found)
+    from models.list import List
+    if List.get_by_id(list_id) is None:
+        list_id = 1
 
     if not url:
         return jsonify({'error': 'URL is required'}), 400
@@ -1866,6 +1996,25 @@ def categorize_item_title(title, categories):
     for cat in categories:
         cat_lookup[cat['name'].lower()] = cat['id']
 
+    # Keywords that need word boundary checks to avoid false positives
+    # e.g., "ring" shouldn't match "string", "pan" shouldn't match "pants"
+    NEEDS_WORD_BOUNDARY = {
+        'ring', 'pan', 'pot', 'mat', 'pin', 'cap', 'hat', 'tie', 'cup',
+        'bowl', 'soap', 'comb', 'game', 'toy', 'art', 'car', 'dog', 'cat',
+        'bag', 'box', 'can', 'kit', 'set', 'bed', 'rug', 'lamp', 'vase',
+    }
+
+    def keyword_matches(keyword, text):
+        """Check if keyword exists in text, with word boundaries for short/ambiguous words."""
+        if keyword not in text:
+            return False
+        # For short/ambiguous keywords, require word boundaries
+        if keyword in NEEDS_WORD_BOUNDARY or len(keyword) <= 3:
+            # Use regex for proper word boundary matching
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            return bool(re.search(pattern, text))
+        return True
+
     # Check each rule
     for cat_name, keywords in CATEGORY_RULES.items():
         cat_name_lower = cat_name.lower()
@@ -1873,7 +2022,7 @@ def categorize_item_title(title, categories):
             continue  # Skip rules for categories that don't exist yet
 
         for keyword in keywords:
-            if keyword in title_lower:
+            if keyword_matches(keyword, title_lower):
                 return cat_lookup[cat_name_lower]
 
     return None

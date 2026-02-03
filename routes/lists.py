@@ -14,7 +14,7 @@ def get_lists():
 @lists_bp.route('', methods=['POST'])
 def create_list():
     """Create a new list."""
-    data = request.get_json()
+    data = request.get_json() or {}
     name = data.get('name')
 
     if not name:
@@ -39,7 +39,7 @@ def get_list(list_id):
 @lists_bp.route('/<int:list_id>', methods=['PATCH'])
 def update_list(list_id):
     """Update a list."""
-    data = request.get_json()
+    data = request.get_json() or {}
     list_obj = List.update(
         list_id,
         name=data.get('name'),
@@ -62,11 +62,16 @@ def delete_list(list_id):
 @lists_bp.route('/reorder', methods=['POST'])
 def reorder_lists():
     """Bulk update list positions."""
-    data = request.get_json()
+    data = request.get_json() or {}
     positions = data.get('positions', {})
 
-    # Convert string keys to int
-    positions = {int(k): v for k, v in positions.items()}
+    if not positions or not isinstance(positions, dict):
+        return jsonify({'error': 'positions dict is required'}), 400
+
+    try:
+        positions = {int(k): int(v) for k, v in positions.items()}
+    except (ValueError, TypeError):
+        return jsonify({'error': 'positions must be {id: position} with numeric values'}), 400
 
     List.reorder(positions)
     return jsonify({'success': True})

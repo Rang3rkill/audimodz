@@ -38,9 +38,14 @@ def main():
         from config import FLASK_HOST, FLASK_PORT, FLASK_DEBUG
 
         logger.info("Initializing database...")
-        from database import init_db
+        from database import init_db, backup_db
         init_db()
         logger.info("Database initialized successfully.")
+
+        # Auto-backup on startup
+        backup_path = backup_db()
+        if backup_path:
+            logger.info(f"Database backed up to: {backup_path}")
 
         logger.info("Loading routes...")
         from routes import pages_bp, items_bp, categories_bp, lists_bp
