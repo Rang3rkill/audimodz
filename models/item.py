@@ -363,6 +363,13 @@ class Item:
             ''')
             stats['missing_images'] = cursor.fetchone()[0]
 
+            # Missing price count
+            cursor.execute('''
+                SELECT COUNT(*) FROM items
+                WHERE current_price IS NULL
+            ''')
+            stats['missing_price'] = cursor.fetchone()[0]
+
             return stats
         finally:
             conn.close()

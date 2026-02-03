@@ -259,14 +259,20 @@ def delete_item(item_id):
 @items_bp.route('/batch', methods=['POST'])
 def batch_operations():
     """Perform batch operations on multiple items."""
-    data = request.get_json()
+    data = request.get_json() or {}
     operation = data.get('operation')
     item_ids = data.get('item_ids', [])
 
     if not operation:
         return jsonify({'error': 'operation is required'}), 400
-    if not item_ids:
-        return jsonify({'error': 'item_ids is required'}), 400
+    if not item_ids or not isinstance(item_ids, list):
+        return jsonify({'error': 'item_ids list is required'}), 400
+
+    # Validate all IDs are integers
+    try:
+        item_ids = [int(i) for i in item_ids]
+    except (ValueError, TypeError):
+        return jsonify({'error': 'item_ids must contain integers'}), 400
 
     results = {'success': 0, 'failed': 0, 'errors': []}
 
@@ -385,11 +391,9 @@ def get_stats():
     """Get item statistics for dashboard."""
     stats = Item.get_stats()
 
-    # Add missing data counts
-    items = Item.get_all()
-    stats['missing_image'] = len([i for i in items if not has_valid_image(i)])
-    stats['missing_price'] = len([i for i in items if i.get('current_price') is None])
-    stats['missing_any'] = len([i for i in items if not has_valid_image(i) or i.get('current_price') is None])
+    # Derive missing_any from SQL-level counts (no need to load all items)
+    stats['missing_image'] = stats.get('missing_images', 0)
+    stats['missing_any'] = stats['missing_image'] + stats.get('missing_price', 0)
 
     return jsonify(stats)
 

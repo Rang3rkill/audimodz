@@ -14,7 +14,7 @@ def get_categories():
 @categories_bp.route('', methods=['POST'])
 def create_category():
     """Create a new category."""
-    data = request.get_json()
+    data = request.get_json() or {}
     name = data.get('name')
 
     if not name:
@@ -39,7 +39,7 @@ def get_category(category_id):
 @categories_bp.route('/<int:category_id>', methods=['PATCH'])
 def update_category(category_id):
     """Update a category."""
-    data = request.get_json()
+    data = request.get_json() or {}
     category = Category.update(
         category_id,
         name=data.get('name'),
@@ -62,11 +62,16 @@ def delete_category(category_id):
 @categories_bp.route('/reorder', methods=['POST'])
 def reorder_categories():
     """Bulk update category positions."""
-    data = request.get_json()
+    data = request.get_json() or {}
     positions = data.get('positions', {})
 
-    # Convert string keys to int
-    positions = {int(k): v for k, v in positions.items()}
+    if not positions or not isinstance(positions, dict):
+        return jsonify({'error': 'positions dict is required'}), 400
+
+    try:
+        positions = {int(k): int(v) for k, v in positions.items()}
+    except (ValueError, TypeError):
+        return jsonify({'error': 'positions must be {id: position} with numeric values'}), 400
 
     Category.reorder(positions)
     return jsonify({'success': True})
