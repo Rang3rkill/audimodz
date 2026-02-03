@@ -596,7 +596,9 @@ async function handleImport(data) {
 // UTILITY FUNCTIONS
 // ============================================================
 async function fetchLists() {
-  const response = await fetch(`${API_BASE}/api/lists`);
+  const response = await fetch(`${API_BASE}/api/lists`, {
+    signal: AbortSignal.timeout(5000), // 5 second timeout
+  });
   if (!response.ok) throw new Error('Failed to fetch lists');
   return response.json();
 }

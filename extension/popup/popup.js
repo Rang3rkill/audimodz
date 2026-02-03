@@ -110,7 +110,9 @@ function updateScanSection() {
 // Load lists from the wishlist app
 async function loadLists() {
   try {
-    const response = await fetch(`${API_BASE}/api/lists`);
+    const response = await fetch(`${API_BASE}/api/lists`, {
+      signal: AbortSignal.timeout(5000), // 5 second timeout
+    });
     if (!response.ok) throw new Error('Could not connect to wishlist app');
 
     const lists = await response.json();
