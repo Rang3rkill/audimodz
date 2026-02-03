@@ -163,7 +163,9 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
       items = itemList;
     } else {
       // Get all items from server
-      const resp = await fetch(`${API_BASE}/api/items`);
+      const resp = await fetch(`${API_BASE}/api/items`, {
+        signal: AbortSignal.timeout(10000), // 10 second timeout
+      });
       if (!resp.ok) throw new Error('Failed to get items');
       const allItems = await resp.json();
 
@@ -218,6 +220,7 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image_url: imageUrl }),
+            signal: AbortSignal.timeout(5000), // 5 second timeout
           });
           if (updateResp.ok) {
             fixImagesStatus.updated++;
@@ -529,6 +532,7 @@ async function handleImport(data) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
+        signal: AbortSignal.timeout(30000), // 30 second timeout for imports (can be slow with many items)
       });
 
       if (!response.ok) {

@@ -80,9 +80,17 @@ def ensure_thumb_url(product_url, image_url):
     """Ensure product_url has thumb_url parameter for server-side image recovery."""
     if not product_url or not image_url:
         return product_url
-    if 'thumb_url=' in (product_url or ''):
+    if 'thumb_url=' in product_url:
+        return product_url
+    # Validate image_url is actually a URL
+    if not image_url.startswith('http'):
         return product_url
     from urllib.parse import quote
+    # Handle URL fragments correctly: query params must come before fragment
+    if '#' in product_url:
+        base, fragment = product_url.split('#', 1)
+        separator = '&' if '?' in base else '?'
+        return f"{base}{separator}thumb_url={quote(image_url, safe='')}#{fragment}"
     separator = '&' if '?' in product_url else '?'
     return f"{product_url}{separator}thumb_url={quote(image_url, safe='')}"
 
@@ -94,13 +102,17 @@ _last_scrape_time = 0
 
 
 def rate_limit_scrape():
-    """Ensure we don't hit Temu too fast."""
+    """Ensure we don't hit Temu too fast. Does not block other threads while sleeping."""
     global _last_scrape_time
+    # Calculate sleep time while holding lock, then release before sleeping
     with _scrape_lock:
         elapsed = time.time() - _last_scrape_time
-        if elapsed < SCRAPE_DELAY:
-            time.sleep(SCRAPE_DELAY - elapsed)
-        _last_scrape_time = time.time()
+        sleep_time = max(0, SCRAPE_DELAY - elapsed)
+        # Reserve our slot by updating the time now
+        _last_scrape_time = time.time() + sleep_time
+    # Sleep outside the lock so other threads aren't blocked
+    if sleep_time > 0:
+        time.sleep(sleep_time)
 
 
 def retry_on_failure(max_retries=3, delay=2):
@@ -1940,6 +1952,25 @@ def categorize_item_title(title, categories):
     for cat in categories:
         cat_lookup[cat['name'].lower()] = cat['id']
 
+    # Keywords that need word boundary checks to avoid false positives
+    # e.g., "ring" shouldn't match "string", "pan" shouldn't match "pants"
+    NEEDS_WORD_BOUNDARY = {
+        'ring', 'pan', 'pot', 'mat', 'pin', 'cap', 'hat', 'tie', 'cup',
+        'bowl', 'soap', 'comb', 'game', 'toy', 'art', 'car', 'dog', 'cat',
+        'bag', 'box', 'can', 'kit', 'set', 'bed', 'rug', 'lamp', 'vase',
+    }
+
+    def keyword_matches(keyword, text):
+        """Check if keyword exists in text, with word boundaries for short/ambiguous words."""
+        if keyword not in text:
+            return False
+        # For short/ambiguous keywords, require word boundaries
+        if keyword in NEEDS_WORD_BOUNDARY or len(keyword) <= 3:
+            # Use regex for proper word boundary matching
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            return bool(re.search(pattern, text))
+        return True
+
     # Check each rule
     for cat_name, keywords in CATEGORY_RULES.items():
         cat_name_lower = cat_name.lower()
@@ -1947,7 +1978,7 @@ def categorize_item_title(title, categories):
             continue  # Skip rules for categories that don't exist yet
 
         for keyword in keywords:
-            if keyword in title_lower:
+            if keyword_matches(keyword, title_lower):
                 return cat_lookup[cat_name_lower]
 
     return None
