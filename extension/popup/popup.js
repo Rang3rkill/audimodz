@@ -663,7 +663,14 @@ async function scrapeTemuAllTabs() {
 
           // Prefer long_thumb_url (product photo) over thumb_url (may be sale banner).
           // item.image is an object on the cart API, so filter to strings only.
-          const imageCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          // Also check skc_list[0] for image fields (variant-specific images).
+          const skcItem = (item.skc_list || item.skcList)?.[0] || {};
+          const imageCandidates = [
+            item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl,
+            item.imageUrl, item.image_url, item.mainImage, item.primary_image, item.origin_image,
+            skcItem.long_thumb_url, skcItem.thumb_url, skcItem.thumbUrl, skcItem.image_url,
+            typeof item.image === 'string' ? item.image : null,
+          ];
           const image = imageCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           const { salePrice, originalPrice } = pickBestPrice(item);
 
@@ -747,7 +754,14 @@ async function scrapeTemuAllTabs() {
           const { salePrice, originalPrice } = pickBestPrice(item);
 
           // Filter to string URLs only (item.image can be an object on Temu's API)
-          const imgCandidates = [item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl];
+          // Also check skc_list[0] for variant-specific images
+          const jsSkcItem = (item.skc_list || item.skcList)?.[0] || {};
+          const imgCandidates = [
+            item.long_thumb_url, item.thumb_url, item.thumbUrl, item.goods_img, item.hdThumbUrl,
+            item.imageUrl, item.image_url, item.mainImage, item.primary_image, item.origin_image,
+            jsSkcItem.long_thumb_url, jsSkcItem.thumb_url, jsSkcItem.thumbUrl, jsSkcItem.image_url,
+            typeof item.image === 'string' ? item.image : null,
+          ];
           const itemImage = imgCandidates.find(v => typeof v === 'string' && v.startsWith('http')) || null;
           // Embed thumb_url in product URL for server-side image recovery
           let finalUrl = productUrl;
