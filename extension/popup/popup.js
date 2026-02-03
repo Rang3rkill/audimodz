@@ -1701,16 +1701,50 @@ function scrapeCartItems(store) {
       const imageUrl = img?.src || null;
       if (imageUrl) stats.withImage++;
 
-      // Get price
+      // Get price (current and original for sale detection)
       let price = null;
-      const priceEl = item.querySelector('.sc-product-price, .sc-price, .a-price .a-offscreen');
-      if (priceEl) {
-        const priceText = priceEl.textContent?.replace(/[^0-9.]/g, '');
-        const parsed = parseFloat(priceText);
-        // Validate price is reasonable (not negative, not absurdly high)
-        if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
-          price = parsed;
-          stats.withPrice++;
+      let originalPrice = null;
+
+      // Amazon shows prices in various formats - look for both current and "was" prices
+      // Current price selectors (sale price or regular price)
+      const currentPriceSelectors = [
+        '.sc-product-price',
+        '.sc-price',
+        '.a-price:not([data-a-strike]) .a-offscreen',
+        '.a-color-price',
+      ];
+      // Original/was price selectors (strikethrough prices)
+      const originalPriceSelectors = [
+        '.a-price[data-a-strike] .a-offscreen',
+        '.a-text-strike .a-offscreen',
+        '.a-text-strike',
+        '.a-price-was .a-offscreen',
+      ];
+
+      // Try to get current price
+      for (const sel of currentPriceSelectors) {
+        const el = item.querySelector(sel);
+        if (el) {
+          const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+          const parsed = parseFloat(priceText);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
+            price = parsed;
+            stats.withPrice++;
+            break;
+          }
+        }
+      }
+
+      // Try to get original price (strikethrough/was price)
+      for (const sel of originalPriceSelectors) {
+        const el = item.querySelector(sel);
+        if (el) {
+          const priceText = el.textContent?.replace(/[^0-9.]/g, '');
+          const parsed = parseFloat(priceText);
+          if (!isNaN(parsed) && parsed > 0 && parsed < 100000 && parsed > (price || 0)) {
+            originalPrice = parsed;
+            break;
+          }
         }
       }
 
@@ -1731,6 +1765,7 @@ function scrapeCartItems(store) {
         title: title,
         image_url: imageUrl,
         price: price,
+        original_price: originalPrice,
         quantity: quantity,
       });
     });

@@ -34,7 +34,8 @@ def is_valid_product_image(url):
         if pattern in url_lower:
             return False
     # Must be from a known CDN with product-like path
-    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront', 'cdn', 'img.']):
+    # Includes Temu CDNs (kwcdn, akamaized, temu) and Amazon CDNs (media-amazon, images-amazon)
+    if not any(domain in url_lower for domain in ['kwcdn', 'akamaized', 'temu', 'cloudfront', 'cdn', 'img.', 'media-amazon', 'images-amazon']):
         return False
     # Product images typically have dimensions or product identifiers
     # Very short URLs are suspicious
