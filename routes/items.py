@@ -807,18 +807,13 @@ def scrape_temu_product(url):
 
                                 # Use sale price if available, otherwise fall back to price
                                 price_val = sale_val or orig_val
-                                if price_val:
-                                    p = float(price_val)
-                                    if p > 100 and '.' not in str(price_val):
-                                        p = p / 100
-                                    if 0.01 <= p <= 9999:
-                                        data['price'] = round(p, 2)
+                                p = normalize_price_cents(price_val)
+                                if p is not None and 0.01 <= p <= 9999:
+                                    data['price'] = round(p, 2)
                                 # Also store original price if both exist
                                 if sale_val and orig_val:
-                                    op = float(orig_val)
-                                    if op > 100 and '.' not in str(orig_val):
-                                        op = op / 100
-                                    if 0.01 <= op <= 9999:
+                                    op = normalize_price_cents(orig_val)
+                                    if op is not None and 0.01 <= op <= 9999:
                                         data['original_price'] = round(op, 2)
                 except (ValueError, KeyError):
                     pass
@@ -899,15 +894,10 @@ def scrape_temu_product(url):
                 for pattern in price_patterns:
                     matches = re.findall(pattern, html)
                     for match in matches:
-                        try:
-                            price = float(match)
-                            if price > 100 and '.' not in str(match):
-                                price = price / 100
-                            if 0.01 <= price <= 9999:
-                                data['price'] = round(price, 2)
-                                break
-                        except ValueError:
-                            continue
+                        price = normalize_price_cents(match)
+                        if price is not None and 0.01 <= price <= 9999:
+                            data['price'] = round(price, 2)
+                            break
                     if 'price' in data:
                         break
         except Exception:
