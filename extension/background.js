@@ -213,7 +213,9 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
 
       try {
         const cleanUrl = cleanProductUrl(item.product_url);
+        console.log(`[Judi's Wishlist] Opening URL for "${(item.title || '').substring(0, 30)}": ${cleanUrl}`);
         const imageUrl = await scrapeImageFromProductPage(cleanUrl);
+        console.log(`[Judi's Wishlist] Scraped image: ${imageUrl ? imageUrl.substring(0, 80) + '...' : 'null'}`);
 
         if (imageUrl && imageUrl !== item.image_url) {
           const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
