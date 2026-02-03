@@ -1586,11 +1586,10 @@ def update_images():
         # Update image and also embed thumb_url in product_url for future refreshes
         item_updates = {'image_url': new_image, 'last_checked': datetime.now().isoformat()}
 
-        # Update product_url to include thumb_url if not already there
+        # Update product_url to include thumb_url if not already there (use ensure_thumb_url for proper formatting)
         product_url = item.get('product_url', '')
-        if 'thumb_url=' not in product_url:
-            from urllib.parse import urlencode, quote
-            item_updates['product_url'] = product_url + '&thumb_url=' + quote(new_image, safe='')
+        if product_url and 'thumb_url=' not in product_url:
+            item_updates['product_url'] = ensure_thumb_url(product_url, new_image)
 
         Item.update(item['id'], **item_updates)
         updated += 1
