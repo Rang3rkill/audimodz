@@ -214,10 +214,25 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
       try {
         const cleanUrl = cleanProductUrl(item.product_url);
         console.log(`[Judi's Wishlist] Opening URL for "${(item.title || '').substring(0, 30)}": ${cleanUrl}`);
-        const imageUrl = await scrapeImageFromProductPage(cleanUrl);
-        console.log(`[Judi's Wishlist] Scraped image: ${imageUrl ? imageUrl.substring(0, 80) + '...' : 'null'}`);
+        const result = await scrapeImageFromProductPage(cleanUrl);
+        const { imageUrl, isSoldOut } = result || {};
+        console.log(`[Judi's Wishlist] Scraped image: ${imageUrl ? imageUrl.substring(0, 80) + '...' : 'null'}, soldOut: ${isSoldOut}`);
 
-        if (imageUrl && imageUrl !== item.image_url) {
+        // If item is sold out, mark it as unavailable and skip image update
+        if (isSoldOut) {
+          console.log(`[Judi's Wishlist] ⚠ Item SOLD OUT: ${(item.title || '').substring(0, 40)}`);
+          try {
+            await fetch(`${API_BASE}/api/items/${item.id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ is_unavailable: 1 }),
+              signal: AbortSignal.timeout(5000),
+            });
+            fixImagesStatus.skipped++; // Count as skipped (not failed)
+          } catch {
+            fixImagesStatus.failed++;
+          }
+        } else if (imageUrl && imageUrl !== item.image_url) {
           const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -254,8 +269,8 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
 
 /**
  * Open a product page in a VISIBLE (active) tab, wait for it to render,
- * scrape the product image, close the tab, and return the image URL.
- * Retries once if first attempt fails.
+ * scrape the product image, close the tab, and return { imageUrl, isSoldOut }.
+ * Retries once if first attempt fails (unless item is sold out).
  */
 async function scrapeImageFromProductPage(url) {
   // Open the product page in a VISIBLE tab so Temu renders it fully
@@ -264,7 +279,7 @@ async function scrapeImageFromProductPage(url) {
     tab = await chrome.tabs.create({ url, active: true });
   } catch (e) {
     console.log(`[Judi's Wishlist] Failed to create tab for ${url.substring(0, 60)}: ${e.message}`);
-    return null;
+    return { imageUrl: null, isSoldOut: false };
   }
 
   try {
@@ -276,12 +291,12 @@ async function scrapeImageFromProductPage(url) {
     try {
       tabInfo = await chrome.tabs.get(tab.id);
     } catch {
-      return null; // Tab was closed externally
+      return { imageUrl: null, isSoldOut: false }; // Tab was closed externally
     }
     const tabUrl = (tabInfo.url || '').toLowerCase();
     if (tabUrl.startsWith('chrome-error://') || tabUrl.startsWith('chrome://') || tabUrl === 'about:blank') {
       console.log(`[Judi's Wishlist] Tab navigated to error/restricted page: ${tabUrl}`);
-      return null;
+      return { imageUrl: null, isSoldOut: false };
     }
 
     // Give Temu's JS time to render images
@@ -295,18 +310,24 @@ async function scrapeImageFromProductPage(url) {
     await sleep(800);
 
     // First scrape attempt
-    let imageUrl = await executeImageScrape(tab.id);
+    let result = await executeImageScrape(tab.id);
 
-    // If first attempt failed, wait longer and try again (images may still be loading)
-    if (!imageUrl) {
-      await sleep(3000);
-      imageUrl = await executeImageScrape(tab.id);
+    // If sold out, return immediately - don't retry
+    if (result.isSoldOut) {
+      console.log(`[Judi's Wishlist] Item is SOLD OUT - skipping image scrape`);
+      return result;
     }
 
-    return imageUrl;
+    // If first attempt failed to find image, wait longer and try again
+    if (!result.imageUrl) {
+      await sleep(3000);
+      result = await executeImageScrape(tab.id);
+    }
+
+    return result;
   } catch (e) {
     console.log(`[Judi's Wishlist] Scrape error for ${url.substring(0, 60)}: ${e.message}`);
-    return null;
+    return { imageUrl: null, isSoldOut: false };
   } finally {
     // Always close the tab when done
     try { await chrome.tabs.remove(tab.id); } catch {}
@@ -464,7 +485,25 @@ async function executeImageScrape(tabId) {
         const isProductPage = pageUrl.includes('goods_id') || pageUrl.includes('_p_') ||
           pageUrl.includes('/product/') || pageUrl.includes('goods.html');
         if (!isProductPage) {
-          return null; // Redirected away from product page
+          return { imageUrl: null, isSoldOut: false }; // Redirected away from product page
+        }
+
+        // Check if item is sold out / unavailable FIRST - before trying to scrape images
+        // This prevents picking up images from "similar items" recommendations
+        const pageText = (document.body?.innerText || '').toLowerCase();
+        const isSoldOut = pageText.includes('this item is sold out') ||
+          pageText.includes('item is sold out') ||
+          pageText.includes('out of stock') ||
+          pageText.includes('unavailable for purchase') ||
+          pageText.includes('no longer available') ||
+          pageText.includes('item is no longer') ||
+          pageText.includes('product is unavailable') ||
+          pageText.includes('check out similar items') ||
+          document.querySelector('[class*="sold-out"], [class*="soldOut"], [class*="SoldOut"], [class*="out-of-stock"], [class*="outOfStock"], [class*="unavailable"]') !== null;
+
+        // If sold out, return immediately - don't scrape images from recommendations section
+        if (isSoldOut) {
+          return { imageUrl: null, isSoldOut: true };
         }
 
         const BAD_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
@@ -494,7 +533,7 @@ async function executeImageScrape(tabId) {
         // 1. og:image meta tag — most reliable on rendered product pages
         const ogImage = document.querySelector('meta[property="og:image"]');
         if (ogImage?.content && isGoodImage(ogImage.content)) {
-          return ogImage.content;
+          return { imageUrl: ogImage.content, isSoldOut: false };
         }
 
         // 2. JSON-LD structured data
@@ -507,7 +546,7 @@ async function executeImageScrape(tabId) {
               const imgs = Array.isArray(candidate) ? candidate : [candidate];
               for (const img of imgs) {
                 const imgUrl = typeof img === 'string' ? img : img?.url;
-                if (isGoodImage(imgUrl)) return imgUrl;
+                if (isGoodImage(imgUrl)) return { imageUrl: imgUrl, isSoldOut: false };
               }
             }
           } catch {}
@@ -531,7 +570,7 @@ async function executeImageScrape(tabId) {
             const match = text.match(pattern);
             if (match) {
               const found = cleanUrl(match[1]);
-              if (isGoodImage(found)) return found;
+              if (isGoodImage(found)) return { imageUrl: found, isSoldOut: false };
             }
           }
         }
@@ -555,12 +594,12 @@ async function executeImageScrape(tabId) {
           try {
             for (const img of document.querySelectorAll(selector)) {
               const src = img.src || img.dataset?.src || img.getAttribute('data-origin-src') || '';
-              if (isGoodImage(src)) return src;
+              if (isGoodImage(src)) return { imageUrl: src, isSoldOut: false };
               // Check srcset for high-res version
               const srcset = img.srcset || '';
               if (srcset) {
                 const firstSrc = srcset.split(',')[0]?.trim()?.split(/\s+/)[0];
-                if (isGoodImage(firstSrc)) return firstSrc;
+                if (isGoodImage(firstSrc)) return { imageUrl: firstSrc, isSoldOut: false };
               }
             }
           } catch {}
@@ -573,13 +612,13 @@ async function executeImageScrape(tabId) {
           const w = img.naturalWidth || parseInt(img.width) || 0;
           const h = img.naturalHeight || parseInt(img.height) || 0;
           // Accept if dimensions available and large enough, OR if we can't check
-          if ((w > 80 && h > 80) || (w === 0 && h === 0)) return src;
+          if ((w > 80 && h > 80) || (w === 0 && h === 0)) return { imageUrl: src, isSoldOut: false };
         }
 
         // 6. data-src / lazy-loaded images
         for (const img of document.querySelectorAll('img[data-src], img[data-origin-src]')) {
           const src = img.dataset.src || img.getAttribute('data-origin-src') || '';
-          if (isGoodImage(src)) return src;
+          if (isGoodImage(src)) return { imageUrl: src, isSoldOut: false };
         }
 
         // 7. CSS background images from product containers
@@ -591,20 +630,20 @@ async function executeImageScrape(tabId) {
               const bg = getComputedStyle(el).backgroundImage;
               if (bg && bg !== 'none') {
                 const match = bg.match(/url\(["']?(https?:\/\/[^"')]+)/);
-                if (match && isGoodImage(match[1])) return match[1];
+                if (match && isGoodImage(match[1])) return { imageUrl: match[1], isSoldOut: false };
               }
             }
           } catch {}
         }
 
-        return null;
+        return { imageUrl: null, isSoldOut: false };
       },
     });
 
-    return results?.[0]?.result || null;
+    return results?.[0]?.result || { imageUrl: null, isSoldOut: false };
   } catch (e) {
     // Tab may have navigated to chrome:// or other restricted URL
-    return null;
+    return { imageUrl: null, isSoldOut: false };
   }
 }
 
