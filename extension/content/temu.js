@@ -30,12 +30,22 @@ const TEMU_SELECTORS = {
     '[class*="Price"]',
   ],
 
-  // Quantity input selectors to try
+  // Quantity input selectors to try (expanded for various UI patterns)
   quantitySelectors: [
-    'input[aria-label][value]',
+    'input[type="number"]',
     'input[type="text"][value]',
+    'input[name*="quantity"]',
+    'input[name*="qty"]',
+    'input[aria-label][value]',
+    'select[name*="quantity"]',
+    'select[name*="qty"]',
+    'select[class*="quantity"]',
     'span[class*="quantity"]',
     'span[class*="Quantity"]',
+    '[class*="stepper"] span',
+    '[class*="counter"] span',
+    '[aria-label*="quantity"]',
+    '[data-testid*="quantity"]',
   ],
 
   // Image selectors to try
@@ -247,12 +257,31 @@ function scrapeTemuCart() {
     const priceEl = trySelectors(container, TEMU_SELECTORS.priceSelectors, 'price');
     const price = parsePrice(priceEl);
 
-    // Get quantity
+    // Get quantity (handle input, select, and span elements)
     let quantity = 1;
     const qtyEl = trySelectors(container, TEMU_SELECTORS.quantitySelectors, 'quantity');
     if (qtyEl) {
-      quantity = parseInt(qtyEl.value) || parseInt(qtyEl.textContent) || 1;
-      log(`  Quantity: ${quantity}`);
+      let parsedQty = null;
+      // Select elements use .value directly
+      if (qtyEl.tagName === 'SELECT') {
+        parsedQty = parseInt(qtyEl.value);
+      }
+      // Input elements use .value
+      else if (qtyEl.tagName === 'INPUT') {
+        parsedQty = parseInt(qtyEl.value);
+      }
+      // Span/div elements - check if text is a standalone number
+      else {
+        const text = qtyEl.textContent?.trim();
+        if (text && /^\d+$/.test(text)) {
+          parsedQty = parseInt(text);
+        }
+      }
+      // Validate parsed quantity
+      if (parsedQty && parsedQty > 0 && parsedQty < 1000) {
+        quantity = parsedQty;
+        log(`  Quantity: ${quantity}`);
+      }
     }
 
     const item = {

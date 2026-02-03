@@ -623,11 +623,11 @@ async function scrapeTemuAllTabs() {
       };
       window.addEventListener('message', handler);
       window.postMessage({ type: '__JWL_CART_DATA_REQUEST__' }, '*');
-      // Timeout after 500ms
+      // Timeout after 1000ms (increased from 500ms for slower page contexts)
       setTimeout(() => {
         window.removeEventListener('message', handler);
         resolve([]);
-      }, 500);
+      }, 1000);
     });
 
     for (const entry of capturedData) {
@@ -673,14 +673,19 @@ async function scrapeTemuAllTabs() {
             : `https://www.temu.com/goods.html?goods_id=${productId}`;
           if (image) productUrl += (productUrl.includes('?') ? '&' : '?') + 'thumb_url=' + encodeURIComponent(image);
 
-          // Quantity: check skc_list[0].quantity, then direct fields
+          // Quantity: check skc_list[0].quantity, then direct fields (expanded field names)
           let qty = 1;
           const skcList = item.skc_list || item.skcList;
           if (Array.isArray(skcList) && skcList.length > 0) {
-            qty = parseInt(skcList[0].quantity || skcList[0].qty) || 1;
+            const skc = skcList[0];
+            qty = parseInt(skc.quantity || skc.qty || skc.num || skc.selected_quantity || skc.selectedQuantity) || 1;
           }
           if (qty <= 1) {
-            qty = Math.max(1, parseInt(item.quantity || item.qty || item.selectedQuantity) || 1);
+            qty = Math.max(1, parseInt(
+              item.quantity || item.qty || item.num ||
+              item.selectedQuantity || item.selected_quantity ||
+              item.goods_quantity || item.goodsQuantity
+            ) || 1);
           }
 
           allItems.set(productId, {
@@ -757,7 +762,11 @@ async function scrapeTemuAllTabs() {
             image_url: itemImage,
             price: salePrice,
             original_price: originalPrice,
-            quantity: Math.max(1, parseInt(item.quantity || item.qty) || 1),
+            quantity: Math.max(1, parseInt(
+              item.quantity || item.qty || item.num ||
+              item.selectedQuantity || item.selected_quantity ||
+              item.goods_quantity || item.goodsQuantity
+            ) || 1),
           });
         });
 
@@ -1091,13 +1100,51 @@ async function scrapeTemuAllTabs() {
         }
       }
 
-      // Get quantity (validate it's reasonable)
+      // Get quantity (validate it's reasonable) - check multiple element types
       let quantity = 1;
-      const qtyEl = container?.querySelector('input[type="text"], input[value], input[type="number"]');
-      if (qtyEl) {
-        const parsedQty = parseInt(qtyEl.value);
-        if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
-          quantity = parsedQty;
+      if (container) {
+        // Method 1: Input elements (text, number)
+        const qtyInput = container.querySelector('input[type="text"], input[type="number"], input[name*="quantity"], input[name*="qty"]');
+        if (qtyInput) {
+          const parsedQty = parseInt(qtyInput.value);
+          if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+            quantity = parsedQty;
+          }
+        }
+
+        // Method 2: Select dropdowns
+        if (quantity === 1) {
+          const qtySelect = container.querySelector('select[name*="quantity"], select[name*="qty"], select[class*="quantity"], select[class*="qty"]');
+          if (qtySelect) {
+            const parsedQty = parseInt(qtySelect.value);
+            if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+              quantity = parsedQty;
+            }
+          }
+        }
+
+        // Method 3: Stepper widgets (span/div with quantity between +/- buttons)
+        if (quantity === 1) {
+          const stepperSelectors = [
+            '[class*="quantity"] span', '[class*="qty"] span',
+            '[class*="Quantity"] span', '[class*="stepper"] span',
+            '[class*="counter"] span', '[class*="amount"] span',
+            '[aria-label*="quantity"]', '[data-testid*="quantity"]',
+          ];
+          for (const sel of stepperSelectors) {
+            const el = container.querySelector(sel);
+            if (el) {
+              const text = el.textContent?.trim();
+              // Match a standalone number (the quantity display)
+              if (text && /^\d+$/.test(text)) {
+                const parsedQty = parseInt(text);
+                if (parsedQty > 0 && parsedQty < 1000) {
+                  quantity = parsedQty;
+                  break;
+                }
+              }
+            }
+          }
         }
       }
 

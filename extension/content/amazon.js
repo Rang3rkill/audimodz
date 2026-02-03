@@ -80,11 +80,14 @@ function scrapeAmazonCart() {
       price = parseFloat(priceText) || null;
     }
 
-    // Get quantity
+    // Get quantity (handle input and select elements)
     let quantity = 1;
     const qtyEl = item.querySelector(AMAZON_SELECTORS.quantity);
     if (qtyEl) {
-      quantity = parseInt(qtyEl.value) || 1;
+      const parsedQty = parseInt(qtyEl.value);
+      if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+        quantity = parsedQty;
+      }
     }
 
     items.push({
