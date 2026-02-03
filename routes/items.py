@@ -76,6 +76,54 @@ def extract_goods_id(url):
     return None
 
 
+def normalize_price_cents(price):
+    """
+    Server-side safety net for cent normalization.
+    Detects if a price value is likely in cents and converts to dollars.
+    Uses conservative heuristics to avoid false positives.
+    """
+    if price is None:
+        return None
+    try:
+        val = float(price)
+    except (ValueError, TypeError):
+        return None
+
+    # If it's already a float with decimals, it's in dollars
+    if val != int(val):
+        return val
+
+    val = int(val)
+
+    # Reject obviously invalid values
+    if val < 0:
+        return None
+
+    # Small values (< 100) are definitely dollars (prices $0-$99)
+    if val < 100:
+        return float(val)
+
+    # For integers >= 100, use heuristics to detect cents
+    # Key insight: cent values rarely end in 00 (e.g., 15000 for $150.00 is rare)
+    # Dollar values often are round numbers ($150, $200, $500)
+    last_two_digits = val % 100
+
+    # Non-zero ending (like 1299, 499, 199) = definitely cents
+    if last_two_digits != 0:
+        as_dollars = val / 100
+        # Sanity check: result should be a reasonable product price
+        if 0.50 <= as_dollars <= 9999:
+            return as_dollars
+
+    # Values ending in 00: only treat as cents if very high (>=10000 = $100+)
+    # This avoids converting $100, $200, $500 incorrectly
+    if last_two_digits == 0 and val >= 10000:
+        return val / 100
+
+    # Default: assume it's already in dollars
+    return float(val)
+
+
 def ensure_thumb_url(product_url, image_url):
     """Ensure product_url has thumb_url parameter for server-side image recovery."""
     if not product_url or not image_url:
@@ -512,17 +560,12 @@ def import_items():
                 continue
             product_id = str(product_id)
 
-            # Validate and sanitize price
+            # Validate and sanitize price (with cent normalization safety net)
             raw_price = item_data.get('price')
-            new_price = None
-            if raw_price is not None:
-                try:
-                    new_price = float(raw_price)
-                    # Reject invalid prices
-                    if new_price < 0 or new_price > 99999:
-                        new_price = None
-                except (ValueError, TypeError):
-                    new_price = None
+            new_price = normalize_price_cents(raw_price)
+            # Final validation: reject out-of-range prices
+            if new_price is not None and (new_price < 0.01 or new_price > 99999):
+                new_price = None
 
             # Validate and sanitize quantity
             raw_qty = item_data.get('quantity', 1)
@@ -617,16 +660,11 @@ def import_items():
             import_url = item_data.get('product_url', '')
             import_url = ensure_thumb_url(import_url, image_url)
 
-            # Validate original_price if provided
-            original_price = None
+            # Validate original_price if provided (with cent normalization)
             ext_original = item_data.get('original_price')
-            if ext_original is not None:
-                try:
-                    original_price = float(ext_original)
-                    if original_price < 0 or original_price > 99999:
-                        original_price = None
-                except (ValueError, TypeError):
-                    original_price = None
+            original_price = normalize_price_cents(ext_original)
+            if original_price is not None and (original_price < 0.01 or original_price > 99999):
+                original_price = None
 
             # Auto-categorize based on title keywords
             cat_id = categorize_item_title(title, all_categories)

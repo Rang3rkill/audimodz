@@ -416,109 +416,179 @@ function pickBestPrice(obj) {
 
   // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
   // and Temu's split arrays like ["$","4",".","9","9"]
-  // Returns { value: number, hasDecimalInSource: boolean }
+  // Returns { value: number, hasDecimalInSource: boolean, rawString: string|null }
   function parsePrice(v) {
-    if (v == null) return { value: NaN, hasDecimalInSource: false };
+    if (v == null) return { value: NaN, hasDecimalInSource: false, rawString: null };
     if (typeof v === 'number') {
-      // Check if it has a decimal part
-      return { value: v, hasDecimalInSource: v % 1 !== 0 };
+      return { value: v, hasDecimalInSource: v % 1 !== 0, rawString: null };
     }
     if (Array.isArray(v)) {
       const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
-      if (!joined) return { value: NaN, hasDecimalInSource: false };
-      return { value: parseFloat(joined.replace(/[^0-9.]/g, '')), hasDecimalInSource: joined.includes('.') };
+      if (!joined) return { value: NaN, hasDecimalInSource: false, rawString: null };
+      return { value: parseFloat(joined.replace(/[^0-9.]/g, '')), hasDecimalInSource: joined.includes('.'), rawString: joined };
     }
     if (typeof v === 'string') {
-      return { value: parseFloat(v.replace(/[^0-9.]/g, '')), hasDecimalInSource: v.includes('.') };
+      return { value: parseFloat(v.replace(/[^0-9.]/g, '')), hasDecimalInSource: v.includes('.'), rawString: v };
     }
-    return { value: NaN, hasDecimalInSource: false };
+    return { value: NaN, hasDecimalInSource: false, rawString: null };
   }
 
-  // Normalize cents - only if it looks like cents (high integer with no decimal in source)
-  // Threshold: >= 500 cents ($5+) to avoid incorrectly dividing $1-$4 prices
-  // Also never divide if the source had a decimal point (already in dollars)
-  function normalizeCents(val, hasDecimal) {
+  // Smart cent normalization - handles more edge cases than simple threshold
+  // Strategy: Use context clues to determine if a value is in cents or dollars
+  function normalizeCents(val, hasDecimal, rawString, contextPrices) {
     if (val === null || isNaN(val)) return null;
-    // If source had decimal like "$4.99", it's already in dollars
+    // If source had decimal like "$4.99", it's definitely already in dollars
     if (hasDecimal) return val;
-    // Only divide by 100 if it looks like cents (>=500 and is an integer)
-    // This handles 1299 ($12.99) but not 150 (which could be $150)
-    if (val >= 500 && Number.isInteger(val)) return val / 100;
+    // If source string had $ and digits like "$299", it's dollars not cents
+    if (rawString && rawString.includes('$') && /\$\s*\d/.test(rawString)) return val;
+    // If value is a float (not integer), it's already in dollars
+    if (!Number.isInteger(val)) return val;
+    // For integers: use smart heuristics
+    // If we have context prices (other prices from same object) that are clearly
+    // in dollars (have decimals), and this integer is 100x larger, it's likely cents
+    if (contextPrices && contextPrices.length > 0) {
+      const dollarPrices = contextPrices.filter(p => p.hasDecimal && p.value > 0 && p.value < 1000);
+      if (dollarPrices.length > 0) {
+        const avgDollar = dollarPrices.reduce((a, b) => a + b.value, 0) / dollarPrices.length;
+        // If this integer is roughly 100x a known dollar price, it's cents
+        if (val > avgDollar * 50 && val < avgDollar * 200) {
+          return val / 100;
+        }
+      }
+    }
+    // Fallback heuristic: integers >= 100 that look like cent values
+    // Pattern: 3-5 digit integers where dividing by 100 gives reasonable price
+    if (val >= 100 && val <= 999999) {
+      const asDollars = val / 100;
+      // If dividing by 100 gives a "normal" price range ($1-$9999), likely cents
+      // But avoid false positives: $150 item shouldn't become $1.50
+      // Key insight: cent values rarely end in 00 (e.g., 15000 for $150.00 is rare)
+      // Dollar values often are round numbers ($150, $200)
+      const lastTwoDigits = val % 100;
+      if (lastTwoDigits !== 0 && asDollars >= 0.50 && asDollars <= 9999) {
+        return asDollars;
+      }
+      // For values ending in 00, only treat as cents if very high (>= 10000 = $100+)
+      if (lastTwoDigits === 0 && val >= 10000) {
+        return asDollars;
+      }
+    }
     return val;
   }
 
-  // Explicit cent fields - always divide by 100
-  const centFields = [obj.salePriceCent, obj.priceCent, pi.priceCent, ps.priceCent];
+  // Collect all parsed prices for context
+  const allParsed = [];
+
+  // Explicit cent fields - always divide by 100 (field name indicates cents)
+  const centFields = [
+    obj.salePriceCent, obj.sale_price_cent,
+    obj.priceCent, obj.price_cent,
+    pi.priceCent, pi.price_cent,
+    pi.salePriceCent, pi.sale_price_cent,
+    ps.priceCent, ps.price_cent,
+  ];
   for (const v of centFields) {
     if (v != null && typeof v === 'number' && v > 0) {
       const best = v / 100;
       if (best >= 0.01 && best <= 99999) {
-        return { salePrice: best, originalPrice: null };
+        // Also try to find original price in cent form
+        const origCentFields = [obj.marketPriceCent, obj.market_price_cent, pi.marketPriceCent, pi.market_price_cent];
+        let origPrice = null;
+        for (const ov of origCentFields) {
+          if (ov != null && typeof ov === 'number' && ov > 0) {
+            const op = ov / 100;
+            if (op > best && op <= 99999) {
+              origPrice = op;
+              break;
+            }
+          }
+        }
+        return { salePrice: best, originalPrice: origPrice };
       }
     }
   }
 
-  // Try sale/discount price fields first (the actual price to pay)
-  const candidates = [
-    pi.price, pi.price_str, pi.priceStr, pi.price_text, pi.split_price_text,
+  // Sale/discount price candidates (prioritize explicit sale fields)
+  // Order matters: most specific sale fields first, generic 'price' last
+  const saleCandidates = [
+    // Explicit sale/promo prices (highest priority)
     pi.sale_price, pi.salePrice,
-    pi.promo_price, pi.discount_price,
     obj.sale_price, obj.salePrice,
     ps.sale_price, ps.salePrice,
+    pi.promo_price, pi.promoPrice,
     obj.promo_price, obj.promoPrice,
-    pi.promo_price, pi.promoPrice, ps.promo_price, ps.promoPrice,
+    ps.promo_price, ps.promoPrice,
+    pi.discount_price, pi.discountPrice,
     obj.discount_price, obj.discountPrice,
-    pi.discount_price, pi.discountPrice, ps.discount_price, ps.discountPrice,
+    ps.discount_price, ps.discountPrice,
     obj.current_price, obj.currentPrice,
     pi.current_price, pi.currentPrice,
-    obj.price, pi.price, ps.price,
+    // String representations (usually already formatted as dollars)
+    pi.price_str, pi.priceStr, pi.price_text,
+    pi.split_price_text,
+    // Generic price fields (lower priority - could be original price)
+    pi.price, obj.price, ps.price,
   ];
+
   // Original/market price candidates
   const originalCandidates = [
     pi.market_price, pi.marketPrice, pi.market_price_str,
     pi.original_price, pi.originalPrice,
     obj.market_price, obj.marketPrice,
     obj.original_price, obj.originalPrice,
+    ps.market_price, ps.marketPrice,
+    ps.original_price, ps.originalPrice,
   ];
 
+  // First pass: collect all parsed values for context
+  for (const v of [...saleCandidates, ...originalCandidates]) {
+    const parsed = parsePrice(v);
+    if (!isNaN(parsed.value) && parsed.value > 0) {
+      allParsed.push(parsed);
+    }
+  }
+
+  // Find best sale price
   let best = null;
   let bestHasDecimal = false;
-  for (const v of candidates) {
-    const { value: n, hasDecimalInSource } = parsePrice(v);
+  let bestRawString = null;
+  for (const v of saleCandidates) {
+    const { value: n, hasDecimalInSource, rawString } = parsePrice(v);
     if (!isNaN(n) && n > 0) {
       best = n;
       bestHasDecimal = hasDecimalInSource;
+      bestRawString = rawString;
       break;
-    }
-  }
-  let original = null;
-  let origHasDecimal = false;
-  for (const v of originalCandidates) {
-    const { value: n, hasDecimalInSource } = parsePrice(v);
-    if (!isNaN(n) && n > 0) {
-      original = n;
-      origHasDecimal = hasDecimalInSource;
-      break;
-    }
-  }
-  // Fall back: if no explicit original, use highest from all candidates
-  if (original === null) {
-    for (const v of [...candidates, ...originalCandidates]) {
-      const { value: n, hasDecimalInSource } = parsePrice(v);
-      if (!isNaN(n) && n > 0 && (original === null || n > original)) {
-        original = n;
-        origHasDecimal = hasDecimalInSource;
-      }
     }
   }
 
-  // Normalize cents using improved logic
-  best = normalizeCents(best, bestHasDecimal);
-  original = normalizeCents(original, origHasDecimal);
+  // Find original price
+  let original = null;
+  let origHasDecimal = false;
+  let origRawString = null;
+  for (const v of originalCandidates) {
+    const { value: n, hasDecimalInSource, rawString } = parsePrice(v);
+    if (!isNaN(n) && n > 0) {
+      original = n;
+      origHasDecimal = hasDecimalInSource;
+      origRawString = rawString;
+      break;
+    }
+  }
+
+  // Normalize cents using smart logic with context
+  best = normalizeCents(best, bestHasDecimal, bestRawString, allParsed);
+  original = normalizeCents(original, origHasDecimal, origRawString, allParsed);
 
   // Validate range
   if (best !== null && (best < 0.01 || best > 99999)) best = null;
   if (original !== null && (original < 0.01 || original > 99999)) original = null;
+
+  // Don't return original if it equals or is less than sale price
+  if (original !== null && best !== null && original <= best) {
+    original = null;
+  }
+
   return { salePrice: best, originalPrice: original };
 }
 
@@ -745,10 +815,15 @@ async function scrapeTemuAllTabs() {
               scriptUrl += '&thumb_url=' + encodeURIComponent(scriptImage);
             }
             // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
-            // Only divide if >= 500 and is integer (avoids incorrectly dividing $150 to $1.50)
+            // Use smart heuristics: non-00 ending integers are likely cents
             let scriptPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
-            if (scriptPrice && scriptPrice >= 500 && Number.isInteger(scriptPrice)) {
-              scriptPrice = scriptPrice / 100;
+            if (scriptPrice && Number.isInteger(scriptPrice) && scriptPrice >= 100) {
+              const lastTwoDigits = scriptPrice % 100;
+              // Non-zero ending (like 1299, 499) = definitely cents
+              // Zero ending but high value (>=10000) = likely cents ($100+)
+              if (lastTwoDigits !== 0 || scriptPrice >= 10000) {
+                scriptPrice = scriptPrice / 100;
+              }
             }
             // Validate price range
             if (scriptPrice && (scriptPrice < 0.01 || scriptPrice > 99999)) {
@@ -978,12 +1053,34 @@ async function scrapeTemuAllTabs() {
           const parsed = allPriceMatches
             .map(p => parseFloat(p.replace(/[\$\s,]/g, '')))
             .filter(p => !isNaN(p) && p > 0.01 && p < 99999);
-          if (parsed.length === 1) {
-            price = parsed[0]; // Only one price visible = it's the price
-          } else if (parsed.length >= 2) {
+          // Deduplicate prices (same value appearing multiple times)
+          const uniquePrices = [...new Set(parsed)].sort((a, b) => a - b);
+          if (uniquePrices.length === 1) {
+            price = uniquePrices[0]; // Only one price visible = it's the price
+          } else if (uniquePrices.length === 2) {
             // Two prices: lower is sale, higher is original
-            price = Math.min(...parsed);
-            originalPrice = Math.max(...parsed);
+            // But sanity check: if lower price is suspiciously low (< $1)
+            // compared to higher (e.g., $0.99 shipping vs $15 item), skip the low one
+            const [low, high] = uniquePrices;
+            if (low < 1 && high > 5) {
+              // Low price is likely shipping, use high as product price
+              price = high;
+            } else {
+              price = low;
+              originalPrice = high;
+            }
+          } else if (uniquePrices.length > 2) {
+            // Multiple prices - try to find the most likely product price
+            // Filter out very low prices (likely shipping) and take the lowest remaining
+            const nonShipping = uniquePrices.filter(p => p >= 1);
+            if (nonShipping.length >= 1) {
+              price = nonShipping[0]; // Lowest non-shipping price
+              if (nonShipping.length >= 2) {
+                originalPrice = nonShipping[nonShipping.length - 1]; // Highest
+              }
+            } else {
+              price = uniquePrices[0]; // Fallback to lowest if all < $1
+            }
           }
         }
 
