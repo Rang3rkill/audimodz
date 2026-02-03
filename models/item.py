@@ -35,63 +35,68 @@ class Item:
     def get_all(category_id=None, list_id=None, in_ready_to_buy=None):
         """Get items with optional filters."""
         conn = get_db_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        query = '''
-            SELECT i.*, c.name as category_name, l.name as list_name
-            FROM items i
-            LEFT JOIN categories c ON i.category_id = c.id
-            LEFT JOIN lists l ON i.list_id = l.id
-            WHERE 1=1
-        '''
-        params = []
+            query = '''
+                SELECT i.*, c.name as category_name, l.name as list_name
+                FROM items i
+                LEFT JOIN categories c ON i.category_id = c.id
+                LEFT JOIN lists l ON i.list_id = l.id
+                WHERE 1=1
+            '''
+            params = []
 
-        if category_id is not None:
-            query += ' AND i.category_id = ?'
-            params.append(category_id)
+            if category_id is not None:
+                query += ' AND i.category_id = ?'
+                params.append(category_id)
 
-        if list_id is not None:
-            query += ' AND i.list_id = ?'
-            params.append(list_id)
+            if list_id is not None:
+                query += ' AND i.list_id = ?'
+                params.append(list_id)
 
-        if in_ready_to_buy is not None:
-            query += ' AND i.in_ready_to_buy = ?'
-            params.append(1 if in_ready_to_buy else 0)
+            if in_ready_to_buy is not None:
+                query += ' AND i.in_ready_to_buy = ?'
+                params.append(1 if in_ready_to_buy else 0)
 
-        query += ' ORDER BY i.position, i.date_added DESC'
+            query += ' ORDER BY i.position, i.date_added DESC'
 
-        cursor.execute(query, params)
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return items
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
     @staticmethod
     def get_by_id(item_id):
         """Get an item by ID."""
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT i.*, c.name as category_name, l.name as list_name
-            FROM items i
-            LEFT JOIN categories c ON i.category_id = c.id
-            LEFT JOIN lists l ON i.list_id = l.id
-            WHERE i.id = ?
-        ''', (item_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT i.*, c.name as category_name, l.name as list_name
+                FROM items i
+                LEFT JOIN categories c ON i.category_id = c.id
+                LEFT JOIN lists l ON i.list_id = l.id
+                WHERE i.id = ?
+            ''', (item_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     @staticmethod
     def get_by_product(store, product_id):
         """Get an item by store and product ID."""
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT * FROM items WHERE store = ? AND product_id = ?
-        ''', (store, str(product_id)))
-        row = cursor.fetchone()
-        conn.close()
-        return dict(row) if row else None
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM items WHERE store = ? AND product_id = ?
+            ''', (store, str(product_id)))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     @staticmethod
     def create(store, product_id, product_url, title, image_url=None,
@@ -180,12 +185,14 @@ class Item:
     def delete(item_id):
         """Delete an item."""
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM items WHERE id = ?', (item_id,))
-        deleted = cursor.rowcount > 0
-        conn.commit()
-        conn.close()
-        return deleted
+        try:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM items WHERE id = ?', (item_id,))
+            deleted = cursor.rowcount > 0
+            conn.commit()
+            return deleted
+        finally:
+            conn.close()
 
     @staticmethod
     def reorder(item_positions):
@@ -213,19 +220,21 @@ class Item:
     def get_ready_to_buy_grouped():
         """Get items ready to buy, grouped by store."""
         conn = get_db_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        cursor.execute('''
-            SELECT i.*, c.name as category_name, l.name as list_name
-            FROM items i
-            LEFT JOIN categories c ON i.category_id = c.id
-            LEFT JOIN lists l ON i.list_id = l.id
-            WHERE i.in_ready_to_buy = 1
-            ORDER BY i.store, i.position
-        ''')
+            cursor.execute('''
+                SELECT i.*, c.name as category_name, l.name as list_name
+                FROM items i
+                LEFT JOIN categories c ON i.category_id = c.id
+                LEFT JOIN lists l ON i.list_id = l.id
+                WHERE i.in_ready_to_buy = 1
+                ORDER BY i.store, i.position
+            ''')
 
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+            items = [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
         # Group by store
         grouped = {}
@@ -244,117 +253,125 @@ class Item:
     def get_count_by_ready_status():
         """Get count of items ready to buy."""
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT COUNT(*) FROM items WHERE in_ready_to_buy = 1
-        ''')
-        count = cursor.fetchone()[0]
-        conn.close()
-        return count
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT COUNT(*) FROM items WHERE in_ready_to_buy = 1
+            ''')
+            return cursor.fetchone()[0]
+        finally:
+            conn.close()
 
     @staticmethod
     def get_stats():
         """Get statistics about items for dashboard."""
         conn = get_db_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        stats = {}
+            stats = {}
 
-        # Total items
-        cursor.execute('SELECT COUNT(*) FROM items')
-        stats['total_items'] = cursor.fetchone()[0]
+            # Total items
+            cursor.execute('SELECT COUNT(*) FROM items')
+            stats['total_items'] = cursor.fetchone()[0]
 
-        # Total value
-        cursor.execute('''
-            SELECT COALESCE(SUM(current_price * quantity), 0) FROM items
-        ''')
-        stats['total_value'] = cursor.fetchone()[0]
+            # Total value
+            cursor.execute('''
+                SELECT COALESCE(SUM(current_price * quantity), 0) FROM items
+            ''')
+            stats['total_value'] = cursor.fetchone()[0]
 
-        # By store
-        cursor.execute('''
-            SELECT store, COUNT(*) as count,
-                   COALESCE(SUM(current_price * quantity), 0) as value
-            FROM items GROUP BY store
-        ''')
-        stats['by_store'] = {
-            row['store']: {'count': row['count'], 'value': row['value']}
-            for row in cursor.fetchall()
-        }
+            # By store
+            cursor.execute('''
+                SELECT store, COUNT(*) as count,
+                       COALESCE(SUM(current_price * quantity), 0) as value
+                FROM items GROUP BY store
+            ''')
+            stats['by_store'] = {
+                row['store']: {'count': row['count'], 'value': row['value']}
+                for row in cursor.fetchall()
+            }
 
-        # Favorites count
-        cursor.execute('SELECT COUNT(*) FROM items WHERE is_favorite = 1')
-        stats['favorites'] = cursor.fetchone()[0]
+            # Favorites count
+            cursor.execute('SELECT COUNT(*) FROM items WHERE is_favorite = 1')
+            stats['favorites'] = cursor.fetchone()[0]
 
-        # Ready to buy
-        cursor.execute('SELECT COUNT(*) FROM items WHERE in_ready_to_buy = 1')
-        stats['ready_to_buy'] = cursor.fetchone()[0]
+            # Ready to buy
+            cursor.execute('SELECT COUNT(*) FROM items WHERE in_ready_to_buy = 1')
+            stats['ready_to_buy'] = cursor.fetchone()[0]
 
-        # Ready to buy value
-        cursor.execute('''
-            SELECT COALESCE(SUM(current_price * quantity), 0)
-            FROM items WHERE in_ready_to_buy = 1
-        ''')
-        stats['ready_to_buy_value'] = cursor.fetchone()[0]
+            # Ready to buy value
+            cursor.execute('''
+                SELECT COALESCE(SUM(current_price * quantity), 0)
+                FROM items WHERE in_ready_to_buy = 1
+            ''')
+            stats['ready_to_buy_value'] = cursor.fetchone()[0]
 
-        # Recently added (last 7 days)
-        cursor.execute('''
-            SELECT COUNT(*) FROM items
-            WHERE date_added >= datetime('now', '-7 days')
-        ''')
-        stats['recently_added'] = cursor.fetchone()[0]
+            # Recently added (last 7 days)
+            cursor.execute('''
+                SELECT COUNT(*) FROM items
+                WHERE date_added >= datetime('now', '-7 days')
+            ''')
+            stats['recently_added'] = cursor.fetchone()[0]
 
-        # Oldest item age
-        cursor.execute('''
-            SELECT date_added FROM items
-            ORDER BY date_added ASC LIMIT 1
-        ''')
-        oldest = cursor.fetchone()
-        if oldest and oldest[0]:
-            from datetime import datetime
-            try:
-                date_str = oldest[0].replace('Z', '').replace('+00:00', '')
-                oldest_date = datetime.fromisoformat(date_str)
-                now = datetime.now()
-                diff_days = (now - oldest_date).days
-                if diff_days == 0:
-                    stats['oldest_item_age'] = 'Today'
-                elif diff_days == 1:
-                    stats['oldest_item_age'] = '1 day'
-                elif diff_days < 7:
-                    stats['oldest_item_age'] = f'{diff_days} days'
-                elif diff_days < 30:
-                    stats['oldest_item_age'] = f'{diff_days // 7} weeks'
-                elif diff_days < 365:
-                    stats['oldest_item_age'] = f'{diff_days // 30} months'
-                else:
-                    stats['oldest_item_age'] = f'{diff_days // 365} years'
-            except (ValueError, TypeError):
+            # Oldest item age
+            cursor.execute('''
+                SELECT date_added FROM items
+                ORDER BY date_added ASC LIMIT 1
+            ''')
+            oldest = cursor.fetchone()
+            if oldest and oldest[0]:
+                try:
+                    date_str = oldest[0].replace('Z', '').replace('+00:00', '')
+                    oldest_date = datetime.fromisoformat(date_str)
+                    now = datetime.now()
+                    diff_days = (now - oldest_date).days
+                    if diff_days == 0:
+                        stats['oldest_item_age'] = 'Today'
+                    elif diff_days == 1:
+                        stats['oldest_item_age'] = '1 day'
+                    elif diff_days < 7:
+                        stats['oldest_item_age'] = f'{diff_days} days'
+                    elif diff_days < 30:
+                        stats['oldest_item_age'] = f'{diff_days // 7} weeks'
+                    elif diff_days < 365:
+                        stats['oldest_item_age'] = f'{diff_days // 30} months'
+                    else:
+                        stats['oldest_item_age'] = f'{diff_days // 365} years'
+                except (ValueError, TypeError):
+                    stats['oldest_item_age'] = '-'
+            else:
                 stats['oldest_item_age'] = '-'
-        else:
-            stats['oldest_item_age'] = '-'
 
-        # Unavailable count
-        cursor.execute('SELECT COUNT(*) FROM items WHERE is_unavailable = 1')
-        stats['unavailable'] = cursor.fetchone()[0]
+            # Unavailable count
+            cursor.execute('SELECT COUNT(*) FROM items WHERE is_unavailable = 1')
+            stats['unavailable'] = cursor.fetchone()[0]
 
-        # Price drops count
-        cursor.execute('''
-            SELECT COUNT(*) FROM items
-            WHERE original_price IS NOT NULL
-            AND current_price IS NOT NULL
-            AND current_price < original_price
-        ''')
-        stats['price_drops'] = cursor.fetchone()[0]
+            # Price drops count
+            cursor.execute('''
+                SELECT COUNT(*) FROM items
+                WHERE original_price IS NOT NULL
+                AND current_price IS NOT NULL
+                AND current_price < original_price
+            ''')
+            stats['price_drops'] = cursor.fetchone()[0]
 
-        conn.close()
-        return stats
+            # Missing images count (avoids loading all items into memory)
+            cursor.execute('''
+                SELECT COUNT(*) FROM items
+                WHERE image_url IS NULL OR image_url = ''
+            ''')
+            stats['missing_images'] = cursor.fetchone()[0]
+
+            return stats
+        finally:
+            conn.close()
 
     @staticmethod
     def normalize_title(title):
         """Normalize a title for comparison."""
         if not title:
             return ''
-        import re
         # Lowercase and remove special characters
         normalized = title.lower()
         normalized = re.sub(r'[^\w\s]', ' ', normalized)
@@ -395,14 +412,15 @@ class Item:
     def find_potential_duplicates(threshold=0.5):
         """Find potential duplicate items based on title similarity."""
         conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute('''
-            SELECT id, title, store, image_url, current_price, date_added
-            FROM items ORDER BY date_added DESC
-        ''')
-        items = [dict(row) for row in cursor.fetchall()]
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, title, store, image_url, current_price, date_added
+                FROM items ORDER BY date_added DESC
+            ''')
+            items = [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
         if len(items) < 2:
             return []

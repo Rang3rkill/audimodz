@@ -343,11 +343,17 @@ def batch_operations():
 @items_bp.route('/reorder', methods=['POST'])
 def reorder_items():
     """Bulk update item positions."""
-    data = request.get_json()
+    data = request.get_json() or {}
     positions = data.get('positions', {})
 
-    # Convert string keys to int
-    positions = {int(k): v for k, v in positions.items()}
+    if not positions or not isinstance(positions, dict):
+        return jsonify({'error': 'positions dict is required'}), 400
+
+    # Convert string keys to int safely
+    try:
+        positions = {int(k): int(v) for k, v in positions.items()}
+    except (ValueError, TypeError):
+        return jsonify({'error': 'positions must be {item_id: position} with numeric values'}), 400
 
     Item.reorder(positions)
     return jsonify({'success': True})

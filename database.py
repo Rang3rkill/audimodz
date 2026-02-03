@@ -146,6 +146,9 @@ def init_db():
     cursor.execute('''
         CREATE INDEX IF NOT EXISTS idx_items_ready ON items(in_ready_to_buy)
     ''')
+    cursor.execute('''
+        CREATE INDEX IF NOT EXISTS idx_items_store_product ON items(store, product_id)
+    ''')
 
     # Insert default categories
     default_categories = [
