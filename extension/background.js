@@ -220,10 +220,40 @@ async function scrapeImageFromProductPage(url) {
       chrome.tabs.onUpdated.addListener(listener);
     });
 
+    // First, dismiss any popups/overlays that might block the page
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          // Close common Temu popups/overlays
+          const closeSelectors = [
+            '[class*="close"]', '[class*="Close"]', '[aria-label="Close"]',
+            '[class*="dismiss"]', '.modal-close', '[data-testid="close"]',
+            'button[class*="dialog"] svg', '[class*="overlay-close"]',
+          ];
+          for (const sel of closeSelectors) {
+            try {
+              const btn = document.querySelector(sel);
+              if (btn && btn.offsetParent !== null) btn.click();
+            } catch {}
+          }
+        },
+      });
+    } catch {}
+
+    // Wait a moment for popup dismissal to take effect
+    await new Promise(r => setTimeout(r, 1000));
+
     // Scrape the product image from the rendered page
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => {
+        // Check we're actually on a product page (not redirected to homepage)
+        const url = window.location.href;
+        if (!url.includes('goods_id') && !url.includes('_p_') && !url.includes('/product/')) {
+          return null; // Redirected away from product page
+        }
+
         const BAD_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
           'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
           'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/'];
@@ -317,7 +347,10 @@ async function scrapeImageFromProductPage(url) {
       },
     });
 
-    return results[0]?.result || null;
+    return results?.[0]?.result || null;
+  } catch (e) {
+    console.log(`[Judi's Wishlist] Scrape error for ${url.substring(0, 60)}: ${e.message}`);
+    return null;
   } finally {
     // Always close the tab when done
     try { await chrome.tabs.remove(tab.id); } catch {}

@@ -1,8 +1,11 @@
+import logging
 from flask import Blueprint, jsonify, request
 from models.item import Item
 from models.category import Category
 import requests
 import re
+
+logger = logging.getLogger(__name__)
 import time
 import threading
 from datetime import datetime
@@ -422,6 +425,17 @@ def export_items():
     })
 
 
+@items_bp.route('/backup', methods=['POST'])
+def create_backup():
+    """Create a database backup on demand."""
+    from database import backup_db
+    try:
+        path = backup_db()
+        return jsonify({'success': True, 'path': path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""
@@ -718,7 +732,7 @@ def scrape_temu_product(url):
                         try:
                             if '\\u' in title:
                                 title = title.encode().decode('unicode_escape')
-                        except:
+                        except (UnicodeDecodeError, UnicodeEncodeError):
                             pass
                         title = title.strip()
                         if len(title) > 5 and len(title) < 500 and 'Temu' not in title:
@@ -811,6 +825,12 @@ def refresh_item(item_id):
         return jsonify({'error': f'Refresh not supported for store: {store}'}), 400
 
     if not scraped:
+        # Track consecutive scrape failures — auto-mark unavailable after 3
+        fail_count = (item.get('scrape_fail_count') or 0) + 1
+        fail_updates = {'scrape_fail_count': fail_count, 'last_checked': datetime.now().isoformat()}
+        if fail_count >= 3:
+            fail_updates['is_unavailable'] = 1
+        Item.update(item_id, **fail_updates)
         return jsonify({'error': 'Could not fetch product data. The page may be unavailable or the product removed.'}), 500
 
     # Update item with scraped data - update ALL fields, not just missing ones
@@ -855,8 +875,11 @@ def refresh_item(item_id):
             updates['title'] = scraped['title']
             updated_fields.append('title')
 
-    # Track last refresh time
+    # Track last refresh time and reset fail counter on success
     updates['last_checked'] = datetime.now().isoformat()
+    updates['scrape_fail_count'] = 0
+    if item.get('is_unavailable') and scraped:
+        updates['is_unavailable'] = 0  # Product is back!
 
     if len(updated_fields) > 0:
         updated_item = Item.update(item_id, **updates)

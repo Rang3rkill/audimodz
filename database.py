@@ -1,5 +1,7 @@
 import sqlite3
 import os
+import shutil
+from datetime import datetime
 import config
 
 
@@ -8,7 +10,29 @@ def get_db_connection():
     conn = sqlite3.connect(config.DATABASE_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")  # Better concurrent access
     return conn
+
+
+def backup_db():
+    """Create a timestamped backup of the database file."""
+    if not os.path.exists(config.DATABASE_PATH):
+        return None
+    backup_dir = os.path.join(config.DATA_DIR, 'backups')
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_path = os.path.join(backup_dir, f'wishlist_{timestamp}.db')
+    shutil.copy2(config.DATABASE_PATH, backup_path)
+
+    # Keep only last 10 backups
+    backups = sorted(
+        [f for f in os.listdir(backup_dir) if f.endswith('.db')],
+        reverse=True
+    )
+    for old in backups[10:]:
+        os.remove(os.path.join(backup_dir, old))
+
+    return backup_path
 
 
 def init_db():
@@ -100,6 +124,12 @@ def init_db():
     # Add is_favorite column if it doesn't exist (migration)
     try:
         cursor.execute('ALTER TABLE items ADD COLUMN is_favorite BOOLEAN DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    # Add scrape_fail_count for auto-detecting unavailable products (migration)
+    try:
+        cursor.execute('ALTER TABLE items ADD COLUMN scrape_fail_count INTEGER DEFAULT 0')
     except sqlite3.OperationalError:
         pass  # Column already exists
 

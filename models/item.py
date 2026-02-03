@@ -144,7 +144,7 @@ class Item:
                 'quantity', 'category_id', 'list_id', 'position',
                 'in_ready_to_buy', 'is_unavailable', 'last_price',
                 'price_updated_at', 'last_checked', 'notes', 'is_favorite',
-                'product_url',
+                'product_url', 'scrape_fail_count',
             }
 
             updates = []
@@ -189,10 +189,11 @@ class Item:
 
     @staticmethod
     def reorder(item_positions):
-        """Bulk update item positions."""
+        """Bulk update item positions (atomic transaction)."""
         conn = get_db_connection()
         try:
             cursor = conn.cursor()
+            cursor.execute('BEGIN')
 
             for item_id, position in item_positions.items():
                 cursor.execute('''
@@ -201,6 +202,9 @@ class Item:
                 ''', (position, datetime.now().isoformat(), item_id))
 
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
         return True
