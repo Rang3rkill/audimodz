@@ -143,7 +143,7 @@ function cleanProductUrl(url) {
 // ============================================================
 let fixImagesRunning = false;
 let fixImagesCancelled = false;
-let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, skipped: 0, current: '' };
+let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, skipped: 0, soldOut: 0, current: '' };
 
 /**
  * Open each product page in a VISIBLE tab, grab the product image, update DB.
@@ -154,7 +154,7 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
   if (fixImagesRunning) return fixImagesStatus;
   fixImagesRunning = true;
   fixImagesCancelled = false;
-  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, skipped: 0, current: '' };
+  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, skipped: 0, soldOut: 0, current: '' };
 
   try {
     let items;
@@ -228,7 +228,7 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
               body: JSON.stringify({ is_unavailable: 1 }),
               signal: AbortSignal.timeout(5000),
             });
-            fixImagesStatus.skipped++; // Count as skipped (not failed)
+            fixImagesStatus.soldOut++;
           } catch {
             fixImagesStatus.failed++;
           }
@@ -313,18 +313,18 @@ async function scrapeImageFromProductPage(url) {
     let result = await executeImageScrape(tab.id);
 
     // If sold out, return immediately - don't retry
-    if (result.isSoldOut) {
+    if (result?.isSoldOut) {
       console.log(`[Judi's Wishlist] Item is SOLD OUT - skipping image scrape`);
       return result;
     }
 
     // If first attempt failed to find image, wait longer and try again
-    if (!result.imageUrl) {
+    if (!result?.imageUrl) {
       await sleep(3000);
       result = await executeImageScrape(tab.id);
     }
 
-    return result;
+    return result || { imageUrl: null, isSoldOut: false };
   } catch (e) {
     console.log(`[Judi's Wishlist] Scrape error for ${url.substring(0, 60)}: ${e.message}`);
     return { imageUrl: null, isSoldOut: false };
@@ -491,15 +491,32 @@ async function executeImageScrape(tabId) {
         // Check if item is sold out / unavailable FIRST - before trying to scrape images
         // This prevents picking up images from "similar items" recommendations
         const pageText = (document.body?.innerText || '').toLowerCase();
-        const isSoldOut = pageText.includes('this item is sold out') ||
-          pageText.includes('item is sold out') ||
-          pageText.includes('out of stock') ||
-          pageText.includes('unavailable for purchase') ||
-          pageText.includes('no longer available') ||
-          pageText.includes('item is no longer') ||
-          pageText.includes('product is unavailable') ||
-          pageText.includes('check out similar items') ||
-          document.querySelector('[class*="sold-out"], [class*="soldOut"], [class*="SoldOut"], [class*="out-of-stock"], [class*="outOfStock"], [class*="unavailable"]') !== null;
+
+        // Look for definitive sold-out indicators
+        const soldOutTextPatterns = [
+          'this item is sold out',
+          'item is sold out',
+          'currently out of stock',
+          'currently unavailable',
+          'no longer available',
+          'item is no longer available',
+          'product is unavailable',
+          'sorry, this item',  // "Sorry, this item is no longer available"
+        ];
+        const hasSoldOutText = soldOutTextPatterns.some(pattern => pageText.includes(pattern));
+
+        // Check for sold-out CSS elements (more specific selectors to avoid false positives)
+        const soldOutSelectors = [
+          '[class*="sold-out"]', '[class*="soldOut"]', '[class*="SoldOut"]',
+          '[class*="out-of-stock"]', '[class*="outOfStock"]', '[class*="OutOfStock"]',
+          '[class*="item-unavailable"]', '[class*="itemUnavailable"]',
+          '[class*="product-unavailable"]', '[class*="productUnavailable"]',
+        ];
+        const hasSoldOutElement = soldOutSelectors.some(sel => {
+          try { return document.querySelector(sel) !== null; } catch { return false; }
+        });
+
+        const isSoldOut = hasSoldOutText || hasSoldOutElement;
 
         // If sold out, return immediately - don't scrape images from recommendations section
         if (isSoldOut) {
