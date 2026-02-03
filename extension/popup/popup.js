@@ -117,8 +117,15 @@ async function loadLists() {
 
     const lists = await response.json();
 
+    // Escape HTML to prevent XSS from malicious list names
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
     const optionsHtml = lists.map(list =>
-      `<option value="${list.id}">${list.name}</option>`
+      `<option value="${list.id}">${escapeHtml(list.name)}</option>`
     ).join('');
 
     elements.listSelect.innerHTML = optionsHtml;
@@ -195,6 +202,7 @@ async function importCart() {
             items: items,
             list_id: listId,
           }),
+          signal: AbortSignal.timeout(30000), // 30 second timeout
         });
         if (response.ok) {
           lastError = null;
@@ -1667,6 +1675,7 @@ async function importFromShareLink() {
             items: items,
             list_id: listId,
           }),
+          signal: AbortSignal.timeout(30000), // 30 second timeout
         });
         if (response.ok) {
           lastError = null;
