@@ -409,7 +409,18 @@ const App = {
             },
             ...options,
         });
-        const data = await response.json();
+
+        // Handle non-JSON responses gracefully (server errors, etc)
+        let data;
+        try {
+            data = await response.json();
+        } catch (e) {
+            if (!response.ok) {
+                throw new Error(`Server error (${response.status})`);
+            }
+            throw new Error('Invalid response from server');
+        }
+
         if (!response.ok) {
             throw new Error(data.error || `Request failed (${response.status})`);
         }
@@ -1843,7 +1854,13 @@ const App = {
                 headers: { 'Content-Type': 'application/json' },
             });
 
-            const data = await response.json();
+            let data;
+            try {
+                data = await response.json();
+            } catch (e) {
+                this.showToast(`Server error (${response.status})`, 'error');
+                return;
+            }
 
             if (!response.ok) {
                 this.showToast(data.error || 'Cannot delete this list', 'error');

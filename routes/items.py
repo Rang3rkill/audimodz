@@ -180,7 +180,7 @@ def get_items():
 @items_bp.route('', methods=['POST'])
 def create_item():
     """Create a new item."""
-    data = request.get_json()
+    data = request.get_json() or {}
 
     required = ['store', 'product_id', 'product_url', 'title']
     for field in required:
@@ -1620,9 +1620,14 @@ def check_prices():
 @items_bp.route('/import-link', methods=['POST'])
 def import_from_link():
     """Import a single item from a Temu product URL."""
-    data = request.get_json()
+    data = request.get_json() or {}
     url = (data.get('url') or '').strip()
     list_id = data.get('list_id', 1)
+
+    # Validate list_id exists (use 1 if not found)
+    from models.list import List
+    if List.get_by_id(list_id) is None:
+        list_id = 1
 
     if not url:
         return jsonify({'error': 'URL is required'}), 400
