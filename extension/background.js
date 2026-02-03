@@ -78,6 +78,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ...fixImagesStatus, running: fixImagesRunning });
     return false;
   }
+
+  // Allow cancellation
+  if (message.type === 'FIX_IMAGES_CANCEL') {
+    fixImagesCancelled = true;
+    sendResponse({ success: true });
+    return false;
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -85,20 +92,69 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 // ============================================================
+// HELPERS
+// ============================================================
+
+const BAD_IMG_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
+  'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
+  'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/'];
+
+/**
+ * Check if an image URL looks like a real product image (not a placeholder/promo).
+ */
+function isGoodImageUrl(url) {
+  if (!url || !url.startsWith('http')) return false;
+  const lower = url.toLowerCase();
+  for (const p of BAD_IMG_PATTERNS) {
+    if (lower.includes(p)) return false;
+  }
+  if (url.length < 30) return false;
+  return true;
+}
+
+/**
+ * Check if an item needs its image fixed.
+ */
+function itemNeedsImage(item) {
+  if (!item.product_url || !item.product_url.includes('temu.com')) return false;
+  if (item.is_unavailable) return false; // Skip unavailable items
+  const img = item.image_url || '';
+  if (!img) return true;
+  if (!isGoodImageUrl(img)) return true;
+  return false;
+}
+
+/**
+ * Strip internal tracking params (thumb_url) from a product URL before opening it.
+ * Temu might reject URLs with unexpected query params.
+ */
+function cleanProductUrl(url) {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete('thumb_url');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+// ============================================================
 // FIX IMAGES: Open each product page, grab real image, update DB
 // ============================================================
 let fixImagesRunning = false;
-let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
+let fixImagesCancelled = false;
+let fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, skipped: 0, current: '' };
 
 /**
  * Open each product page in a VISIBLE tab, grab the product image, update DB.
- * @param {string} mode - 'needs-fix' (only bad/missing images), 'all' (every item), or 'import' (post-import pass)
+ * @param {string} mode - 'needs-fix' (only bad/missing), 'all' (every item), or 'import' (post-import)
  * @param {Array} itemList - optional pre-filtered list of items to process
  */
 async function fixMissingImages(mode = 'needs-fix', itemList = null) {
   if (fixImagesRunning) return fixImagesStatus;
   fixImagesRunning = true;
-  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, current: '' };
+  fixImagesCancelled = false;
+  fixImagesStatus = { total: 0, processed: 0, updated: 0, failed: 0, skipped: 0, current: '' };
 
   try {
     let items;
@@ -112,36 +168,25 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
       const allItems = await resp.json();
 
       if (mode === 'all') {
-        // Refresh ALL items — open every product page
-        items = allItems.filter(i => i.product_url && i.product_url.includes('temu.com'));
+        // Refresh ALL items — open every product page (skip unavailable)
+        items = allItems.filter(i =>
+          i.product_url && i.product_url.includes('temu.com') && !i.is_unavailable
+        );
       } else {
         // Only items that need image fixes
-        const BAD_IMG_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
-          'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
-          'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/'];
-
-        function needsImage(item) {
-          if (!item.product_url || !item.product_url.includes('temu.com')) return false;
-          const img = item.image_url || '';
-          if (!img) return true;
-          const lower = img.toLowerCase();
-          for (const p of BAD_IMG_PATTERNS) {
-            if (lower.includes(p)) return true;
-          }
-          return false;
-        }
-
-        items = allItems.filter(needsImage);
+        items = allItems.filter(itemNeedsImage);
 
         // Also detect duplicate images (3+ items sharing same URL = generic placeholder)
         const imgCounts = {};
         for (const item of allItems) {
           if (item.image_url) imgCounts[item.image_url] = (imgCounts[item.image_url] || 0) + 1;
         }
+        const itemIds = new Set(items.map(i => i.id));
         for (const item of allItems) {
-          if (item.image_url && imgCounts[item.image_url] >= 3 && !items.find(i => i.id === item.id)) {
-            if (item.product_url && item.product_url.includes('temu.com')) {
+          if (item.image_url && imgCounts[item.image_url] >= 3 && !itemIds.has(item.id)) {
+            if (item.product_url && item.product_url.includes('temu.com') && !item.is_unavailable) {
               items.push(item);
+              itemIds.add(item.id);
             }
           }
         }
@@ -156,10 +201,17 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
 
     // Process each item: open visible tab, scrape image, close tab, update DB
     for (const item of items) {
+      // Check for cancellation
+      if (fixImagesCancelled) {
+        console.log('[Judi\'s Wishlist] Image fix cancelled by user');
+        break;
+      }
+
       fixImagesStatus.current = (item.title || '').substring(0, 50);
 
       try {
-        const imageUrl = await scrapeImageFromProductPage(item.product_url);
+        const cleanUrl = cleanProductUrl(item.product_url);
+        const imageUrl = await scrapeImageFromProductPage(cleanUrl);
 
         if (imageUrl && imageUrl !== item.image_url) {
           const updateResp = await fetch(`${API_BASE}/api/items/${item.id}`, {
@@ -169,13 +221,15 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
           });
           if (updateResp.ok) {
             fixImagesStatus.updated++;
+            console.log(`[Judi's Wishlist] ✓ Fixed image for: ${(item.title || '').substring(0, 40)}`);
           } else {
             fixImagesStatus.failed++;
           }
-        } else if (!imageUrl) {
+        } else if (imageUrl && imageUrl === item.image_url) {
+          fixImagesStatus.skipped++; // Already has correct image
+        } else {
           fixImagesStatus.failed++;
         }
-        // If imageUrl === item.image_url, it already has the right image — skip silently
       } catch (e) {
         console.log(`[Judi's Wishlist] Failed to fix image for item ${item.id}: ${e.message}`);
         fixImagesStatus.failed++;
@@ -196,158 +250,39 @@ async function fixMissingImages(mode = 'needs-fix', itemList = null) {
 /**
  * Open a product page in a VISIBLE (active) tab, wait for it to render,
  * scrape the product image, close the tab, and return the image URL.
+ * Retries once if first attempt fails.
  */
 async function scrapeImageFromProductPage(url) {
   // Open the product page in a VISIBLE tab so Temu renders it fully
-  const tab = await chrome.tabs.create({ url, active: true });
+  let tab;
+  try {
+    tab = await chrome.tabs.create({ url, active: true });
+  } catch (e) {
+    console.log(`[Judi's Wishlist] Failed to create tab for ${url.substring(0, 60)}: ${e.message}`);
+    return null;
+  }
 
   try {
     // Wait for the page to fully load
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve(); // Don't reject — still try to scrape
-      }, 25000);
+    await waitForTabLoad(tab.id, 25000);
 
-      function listener(tabId, changeInfo) {
-        if (tabId === tab.id && changeInfo.status === 'complete') {
-          chrome.tabs.onUpdated.removeListener(listener);
-          clearTimeout(timeout);
-          // Give Temu's JS time to render images
-          setTimeout(resolve, 4000);
-        }
-      }
-      chrome.tabs.onUpdated.addListener(listener);
-    });
+    // Give Temu's JS time to render images
+    await sleep(4000);
 
-    // First, dismiss any popups/overlays that might block the page
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: () => {
-          // Close common Temu popups/overlays
-          const closeSelectors = [
-            '[class*="close"]', '[class*="Close"]', '[aria-label="Close"]',
-            '[class*="dismiss"]', '.modal-close', '[data-testid="close"]',
-            'button[class*="dialog"] svg', '[class*="overlay-close"]',
-          ];
-          for (const sel of closeSelectors) {
-            try {
-              const btn = document.querySelector(sel);
-              if (btn && btn.offsetParent !== null) btn.click();
-            } catch {}
-          }
-        },
-      });
-    } catch {}
+    // Dismiss any popups/overlays that might block the page
+    await dismissPopups(tab.id);
+    await sleep(800);
 
-    // Wait a moment for popup dismissal to take effect
-    await new Promise(r => setTimeout(r, 1000));
+    // First scrape attempt
+    let imageUrl = await executeImageScrape(tab.id);
 
-    // Scrape the product image from the rendered page
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        // Check we're actually on a product page (not redirected to homepage)
-        const url = window.location.href;
-        if (!url.includes('goods_id') && !url.includes('_p_') && !url.includes('/product/')) {
-          return null; // Redirected away from product page
-        }
+    // If first attempt failed, wait longer and try again (images may still be loading)
+    if (!imageUrl) {
+      await sleep(3000);
+      imageUrl = await executeImageScrape(tab.id);
+    }
 
-        const BAD_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
-          'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
-          'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/'];
-
-        function isGoodImage(url) {
-          if (!url || !url.startsWith('http')) return false;
-          const lower = url.toLowerCase();
-          for (const p of BAD_PATTERNS) {
-            if (lower.includes(p)) return false;
-          }
-          if (!lower.includes('kwcdn') && !lower.includes('akamaized') &&
-              !lower.includes('temu') && !lower.includes('cloudfront')) return false;
-          if (url.length < 30) return false;
-          return true;
-        }
-
-        // 1. og:image meta tag (most reliable on rendered product pages)
-        const ogImage = document.querySelector('meta[property="og:image"]');
-        if (ogImage?.content && isGoodImage(ogImage.content)) {
-          return ogImage.content;
-        }
-
-        // 2. JSON-LD structured data
-        const jsonLd = document.querySelectorAll('script[type="application/ld+json"]');
-        for (const script of jsonLd) {
-          try {
-            const data = JSON.parse(script.textContent);
-            if (data.image) {
-              const img = Array.isArray(data.image) ? data.image[0] : data.image;
-              const imgUrl = typeof img === 'string' ? img : img?.url;
-              if (isGoodImage(imgUrl)) return imgUrl;
-            }
-          } catch {}
-        }
-
-        // 3. Search inline scripts for image URL patterns
-        const scripts = document.querySelectorAll('script:not([src])');
-        for (const script of scripts) {
-          const text = script.textContent;
-          if (!text || text.length < 10) continue;
-          const patterns = [
-            /"thumb_url"\s*:\s*"(https?:[^"]+)"/,
-            /"thumbUrl"\s*:\s*"(https?:[^"]+)"/,
-            /"hdThumbUrl"\s*:\s*"(https?:[^"]+)"/,
-            /"goods_img"\s*:\s*"(https?:[^"]+)"/,
-            /"goodsImg"\s*:\s*"(https?:[^"]+)"/,
-            /"image_url"\s*:\s*"(https?:[^"]+)"/,
-            /"imageUrl"\s*:\s*"(https?:[^"]+)"/,
-            /"originImage"\s*:\s*"(https?:[^"]+)"/,
-          ];
-          for (const pattern of patterns) {
-            const match = text.match(pattern);
-            if (match) {
-              const found = match[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
-              if (isGoodImage(found)) return found;
-            }
-          }
-        }
-
-        // 4. Visible product images on the page (gallery, main image, etc.)
-        const selectors = [
-          'img[data-not-lazy][src*="kwcdn"]',
-          'img[data-not-lazy][src*="akamaized"]',
-          '[class*="gallery"] img', '[class*="Gallery"] img',
-          '[class*="ProductImage"] img', '[class*="product-image"] img',
-          '[class*="goodsImage"] img', '[class*="mainImage"] img',
-          '.product-img img', '.goods-img img',
-        ];
-        for (const selector of selectors) {
-          try {
-            const imgs = document.querySelectorAll(selector);
-            for (const img of imgs) {
-              const src = img.src || img.dataset.src || '';
-              if (isGoodImage(src)) return src;
-            }
-          } catch {}
-        }
-
-        // 5. Any CDN image on the page
-        const allImgs = document.querySelectorAll('img');
-        for (const img of allImgs) {
-          const src = img.src;
-          if (isGoodImage(src)) {
-            const w = img.naturalWidth || 0;
-            const h = img.naturalHeight || 0;
-            if (w > 80 && h > 80) return src;
-          }
-        }
-
-        return null;
-      },
-    });
-
-    return results?.[0]?.result || null;
+    return imageUrl;
   } catch (e) {
     console.log(`[Judi's Wishlist] Scrape error for ${url.substring(0, 60)}: ${e.message}`);
     return null;
@@ -357,7 +292,219 @@ async function scrapeImageFromProductPage(url) {
   }
 }
 
-// Import items to the wishlist app
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function waitForTabLoad(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve(); // Don't reject — still try to scrape
+    }, timeoutMs);
+
+    function listener(id, changeInfo) {
+      if (id === tabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(listener);
+        clearTimeout(timeout);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function dismissPopups(tabId) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Close common Temu popups/overlays/modals
+        const closeSelectors = [
+          '[class*="close-btn"]', '[class*="closeBtn"]', '[class*="CloseBtn"]',
+          '[aria-label="Close"]', '[aria-label="close"]',
+          '[class*="dismiss"]', '[class*="Dismiss"]',
+          '.modal-close', '[data-testid="close"]',
+          '[class*="overlay-close"]', '[class*="dialog-close"]',
+          // Temu-specific: coupon popup, login prompt
+          '[class*="coupon"] [class*="close"]',
+          '[class*="login"] [class*="close"]',
+          '[class*="popup"] [class*="close"]',
+        ];
+        for (const sel of closeSelectors) {
+          try {
+            const btns = document.querySelectorAll(sel);
+            for (const btn of btns) {
+              if (btn && btn.offsetParent !== null && btn.offsetWidth > 5) {
+                btn.click();
+              }
+            }
+          } catch {}
+        }
+        // Also press Escape key to close modals
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      },
+    });
+  } catch {} // Ignore errors (tab may have navigated to restricted URL)
+}
+
+async function executeImageScrape(tabId) {
+  try {
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        // Check we're actually on a product page (not redirected to homepage/login)
+        const pageUrl = window.location.href;
+        const isProductPage = pageUrl.includes('goods_id') || pageUrl.includes('_p_') ||
+          pageUrl.includes('/product/') || pageUrl.includes('goods.html');
+        if (!isProductPage) {
+          return null; // Redirected away from product page
+        }
+
+        const BAD_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
+          'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
+          'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/', '/icon/', '/logo/'];
+
+        function isGoodImage(url) {
+          if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
+          const lower = url.toLowerCase();
+          for (const p of BAD_PATTERNS) {
+            if (lower.includes(p)) return false;
+          }
+          // Must look like a product image CDN
+          const hasCDN = lower.includes('kwcdn') || lower.includes('akamaized') ||
+            lower.includes('temu') || lower.includes('cloudfront') ||
+            lower.includes('cdn') || lower.includes('img.');
+          if (!hasCDN) return false;
+          if (url.length < 30) return false;
+          return true;
+        }
+
+        // Clean a URL found in scripts (unescape unicode, fix slashes)
+        function cleanUrl(raw) {
+          return raw.replace(/\\u002F/g, '/').replace(/\\\//g, '/').replace(/\\"/g, '');
+        }
+
+        // 1. og:image meta tag — most reliable on rendered product pages
+        const ogImage = document.querySelector('meta[property="og:image"]');
+        if (ogImage?.content && isGoodImage(ogImage.content)) {
+          return ogImage.content;
+        }
+
+        // 2. JSON-LD structured data
+        for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+          try {
+            const data = JSON.parse(script.textContent);
+            const candidates = [data.image, data.thumbnailUrl, data.logo];
+            for (const candidate of candidates) {
+              if (!candidate) continue;
+              const imgs = Array.isArray(candidate) ? candidate : [candidate];
+              for (const img of imgs) {
+                const imgUrl = typeof img === 'string' ? img : img?.url;
+                if (isGoodImage(imgUrl)) return imgUrl;
+              }
+            }
+          } catch {}
+        }
+
+        // 3. Search inline scripts for image URL patterns
+        for (const script of document.querySelectorAll('script:not([src])')) {
+          const text = script.textContent;
+          if (!text || text.length < 50) continue;
+
+          const patterns = [
+            /"(?:long_thumb_url|hdThumbUrl)"\s*:\s*"(https?:[^"]+)"/,
+            /"(?:thumb_url|thumbUrl)"\s*:\s*"(https?:[^"]+)"/,
+            /"(?:goods_img|goodsImg)"\s*:\s*"(https?:[^"]+)"/,
+            /"(?:image_url|imageUrl)"\s*:\s*"(https?:[^"]+)"/,
+            /"(?:originImage|mainImage)"\s*:\s*"(https?:[^"]+)"/,
+            /"(?:gallery|images)"\s*:\s*\["(https?:[^"]+)"/,
+          ];
+
+          for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) {
+              const found = cleanUrl(match[1]);
+              if (isGoodImage(found)) return found;
+            }
+          }
+        }
+
+        // 4. Visible product images on the page (gallery, main image)
+        const gallerySelectors = [
+          // High-confidence product image locations
+          '[class*="gallery"] img[src*="kwcdn"]',
+          '[class*="gallery"] img[src*="akamaized"]',
+          '[class*="Gallery"] img[src*="kwcdn"]',
+          '[class*="Gallery"] img[src*="akamaized"]',
+          '[class*="product-image"] img', '[class*="ProductImage"] img',
+          '[class*="goodsImage"] img', '[class*="mainImage"] img',
+          '[class*="MainImage"] img', '[class*="detail-gallery"] img',
+          'img[data-not-lazy][src*="kwcdn"]',
+          'img[data-not-lazy][src*="akamaized"]',
+          '.product-img img', '.goods-img img',
+        ];
+
+        for (const selector of gallerySelectors) {
+          try {
+            for (const img of document.querySelectorAll(selector)) {
+              const src = img.src || img.dataset?.src || img.getAttribute('data-origin-src') || '';
+              if (isGoodImage(src)) return src;
+              // Check srcset for high-res version
+              const srcset = img.srcset || '';
+              if (srcset) {
+                const firstSrc = srcset.split(',')[0]?.trim()?.split(/\s+/)[0];
+                if (isGoodImage(firstSrc)) return firstSrc;
+              }
+            }
+          } catch {}
+        }
+
+        // 5. Any visible CDN image on the page with reasonable size
+        for (const img of document.querySelectorAll('img')) {
+          const src = img.src;
+          if (!isGoodImage(src)) continue;
+          const w = img.naturalWidth || parseInt(img.width) || 0;
+          const h = img.naturalHeight || parseInt(img.height) || 0;
+          // Accept if dimensions available and large enough, OR if we can't check
+          if ((w > 80 && h > 80) || (w === 0 && h === 0)) return src;
+        }
+
+        // 6. data-src / lazy-loaded images
+        for (const img of document.querySelectorAll('img[data-src], img[data-origin-src]')) {
+          const src = img.dataset.src || img.getAttribute('data-origin-src') || '';
+          if (isGoodImage(src)) return src;
+        }
+
+        // 7. CSS background images from product containers
+        const bgSelectors = ['[class*="product"]', '[class*="goods"]', '[class*="gallery"]',
+          '[class*="image-container"]', '[class*="thumb"]', '[class*="main-pic"]'];
+        for (const sel of bgSelectors) {
+          try {
+            for (const el of document.querySelectorAll(sel)) {
+              const bg = getComputedStyle(el).backgroundImage;
+              if (bg && bg !== 'none') {
+                const match = bg.match(/url\(["']?(https?:\/\/[^"')]+)/);
+                if (match && isGoodImage(match[1])) return match[1];
+              }
+            }
+          } catch {}
+        }
+
+        return null;
+      },
+    });
+
+    return results?.[0]?.result || null;
+  } catch (e) {
+    // Tab may have navigated to chrome:// or other restricted URL
+    return null;
+  }
+}
+
+// ============================================================
+// IMPORT: Send items to wishlist app, then auto-fix images
+// ============================================================
 async function handleImport(data) {
   const response = await fetch(`${API_BASE}/api/items/import`, {
     method: 'POST',
@@ -371,11 +518,16 @@ async function handleImport(data) {
 
   const result = await response.json();
 
-  // After import completes, automatically fix images for all imported items
-  // by opening each product page. Run in background — don't block the import response.
+  // After import, auto-fix images for items that don't have good ones.
+  // Filter to only items that actually need fixing (not all imported items).
   if (result.items && result.items.length > 0) {
     const itemsToFix = result.items
-      .filter(i => i.product_url && i.product_url.includes('temu.com'))
+      .filter(i => {
+        if (!i.product_url || !i.product_url.includes('temu.com')) return false;
+        const img = i.image_url || '';
+        if (!img) return true;
+        return !isGoodImageUrl(img);
+      })
       .map(i => ({
         id: i.id,
         product_url: i.product_url,
@@ -384,25 +536,28 @@ async function handleImport(data) {
       }));
 
     if (itemsToFix.length > 0) {
-      console.log(`[Judi's Wishlist] Post-import: fixing images for ${itemsToFix.length} items`);
+      console.log(`[Judi's Wishlist] Post-import: ${itemsToFix.length} of ${result.items.length} items need image fix`);
       // Don't await — let it run in background
       fixMissingImages('import', itemsToFix)
         .then(s => console.log(`[Judi's Wishlist] Post-import image fix done:`, s))
         .catch(e => console.error(`[Judi's Wishlist] Post-import image fix error:`, e));
+    } else {
+      console.log(`[Judi's Wishlist] Post-import: all ${result.items.length} items already have good images`);
     }
   }
 
   return result;
 }
 
-// Fetch lists from the wishlist app
+// ============================================================
+// UTILITY FUNCTIONS
+// ============================================================
 async function fetchLists() {
   const response = await fetch(`${API_BASE}/api/lists`);
   if (!response.ok) throw new Error('Failed to fetch lists');
   return response.json();
 }
 
-// Check if wishlist app is running
 async function checkConnection() {
   try {
     const response = await fetch(`${API_BASE}/api/lists`, {
