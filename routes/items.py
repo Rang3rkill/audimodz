@@ -281,6 +281,14 @@ def update_item(item_id):
     if not existing:
         return jsonify({'error': 'Item not found'}), 404
 
+    # Validate quantity if provided - must be 1-9999
+    if 'quantity' in data:
+        try:
+            qty = int(data['quantity'])
+            data['quantity'] = max(1, min(9999, qty))  # Clamp to valid range
+        except (ValueError, TypeError):
+            data['quantity'] = 1  # Default on invalid input
+
     # Validate image_url if provided — reject placeholders/bad patterns
     if 'image_url' in data:
         new_img = data['image_url']
@@ -665,6 +673,14 @@ def import_items():
             original_price = normalize_price_cents(ext_original)
             if original_price is not None and (original_price < 0.01 or original_price > 99999):
                 original_price = None
+
+            # Context-aware fix: if original_price is suspiciously large compared to new_price,
+            # it might be cents that normalize_price_cents missed (e.g., 1500 = $15.00)
+            # If original_price / 100 is still >= new_price, treat original as cents
+            if (original_price is not None and new_price is not None and
+                original_price > new_price * 10 and  # Way larger than sale price
+                original_price / 100 >= new_price):   # Divided value still makes sense
+                original_price = original_price / 100
 
             # Auto-categorize based on title keywords
             cat_id = categorize_item_title(title, all_categories)
