@@ -937,17 +937,28 @@ async function scrapeTemuAllTabs() {
         }
       }
 
-      // Get quantity
+      // Get quantity (validate it's reasonable)
       let quantity = 1;
       const qtyEl = container?.querySelector('input[type="text"], input[value], input[type="number"]');
       if (qtyEl) {
-        quantity = parseInt(qtyEl.value) || 1;
+        const parsedQty = parseInt(qtyEl.value);
+        if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+          quantity = parsedQty;
+        }
       }
 
       // Embed thumb_url in product URL for server-side image recovery
       let domProductUrl = `https://www.temu.com/goods.html?goods_id=${productId}`;
       if (imageUrl) {
         domProductUrl += '&thumb_url=' + encodeURIComponent(imageUrl);
+      }
+
+      // Final validation of price/originalPrice bounds
+      if (price !== null && (isNaN(price) || price < 0.01 || price > 99999)) {
+        price = null;
+      }
+      if (originalPrice !== null && (isNaN(originalPrice) || originalPrice < 0.01 || originalPrice > 99999)) {
+        originalPrice = null;
       }
 
       items.push({
@@ -1456,33 +1467,47 @@ function scrapeCartItems(store) {
     // Amazon cart scraping
     const cartItems = document.querySelectorAll('[data-asin]');
     const seen = new Set();
+    let stats = { total: 0, withImage: 0, withPrice: 0, withTitle: 0 };
 
     cartItems.forEach(item => {
       const asin = item.dataset.asin;
-      if (!asin || asin.length !== 10 || seen.has(asin)) return;
+      // ASIN can be 10 chars (B0xxxxxxxxx) or other formats - just check it exists and is alphanumeric
+      if (!asin || asin.length < 5 || !/^[A-Z0-9]+$/i.test(asin) || seen.has(asin)) return;
       seen.add(asin);
+      stats.total++;
 
       // Get title
       const titleEl = item.querySelector('.sc-product-title, .a-truncate-cut, a[href*="/dp/"]');
       let title = titleEl?.textContent?.trim() || 'Unknown Product';
+      if (title && title.length > 5) stats.withTitle++;
 
       // Get image
       const img = item.querySelector('.sc-product-image img, img[src*="images-amazon"]');
       const imageUrl = img?.src || null;
+      if (imageUrl) stats.withImage++;
 
       // Get price
       let price = null;
       const priceEl = item.querySelector('.sc-product-price, .sc-price, .a-price .a-offscreen');
       if (priceEl) {
         const priceText = priceEl.textContent?.replace(/[^0-9.]/g, '');
-        price = parseFloat(priceText) || null;
+        const parsed = parseFloat(priceText);
+        // Validate price is reasonable (not negative, not absurdly high)
+        if (!isNaN(parsed) && parsed > 0 && parsed < 100000) {
+          price = parsed;
+          stats.withPrice++;
+        }
       }
 
       // Get quantity
       let quantity = 1;
       const qtyEl = item.querySelector('.sc-quantity-textfield, select[name*="quantity"], input[name*="quantity"]');
       if (qtyEl) {
-        quantity = parseInt(qtyEl.value) || 1;
+        const parsedQty = parseInt(qtyEl.value);
+        // Validate quantity is reasonable
+        if (!isNaN(parsedQty) && parsedQty > 0 && parsedQty < 1000) {
+          quantity = parsedQty;
+        }
       }
 
       items.push({
@@ -1494,6 +1519,10 @@ function scrapeCartItems(store) {
         quantity: quantity,
       });
     });
+
+    // Attach stats for consistent reporting
+    stats.method = 'dom_scraping';
+    items._stats = stats;
   }
 
   return items;

@@ -500,7 +500,39 @@ def import_items():
                 continue
             product_id = str(product_id)
 
-            new_price = item_data.get('price')
+            # Validate and sanitize price
+            raw_price = item_data.get('price')
+            new_price = None
+            if raw_price is not None:
+                try:
+                    new_price = float(raw_price)
+                    # Reject invalid prices
+                    if new_price < 0 or new_price > 99999:
+                        new_price = None
+                except (ValueError, TypeError):
+                    new_price = None
+
+            # Validate and sanitize quantity
+            raw_qty = item_data.get('quantity', 1)
+            try:
+                quantity = int(raw_qty)
+                if quantity < 1:
+                    quantity = 1
+                elif quantity > 9999:
+                    quantity = 9999
+            except (ValueError, TypeError):
+                quantity = 1
+
+            # Validate image URL
+            raw_image = item_data.get('image_url')
+            image_url = None
+            if raw_image and isinstance(raw_image, str) and raw_image.startswith('http'):
+                if is_valid_product_image(raw_image):
+                    image_url = raw_image
+
+            # Sanitize title (limit length, strip whitespace)
+            raw_title = item_data.get('title', 'Unknown Product')
+            title = str(raw_title).strip()[:500] if raw_title else 'Unknown Product'
 
             # Check for existing item
             existing = Item.get_by_product(store, product_id)
@@ -515,14 +547,12 @@ def import_items():
                         current_price=new_price,
                         price_updated_at=datetime.now().isoformat()
                     )
-                    # Update image if extension has a better one
-                    ext_img = item_data.get('image_url')
-                    if ext_img and isinstance(ext_img, str) and ext_img.startswith('http'):
-                        if not existing.get('image_url') or ext_img != existing.get('image_url'):
-                            price_update['image_url'] = ext_img
+                    # Update image if we have a valid one and it's different
+                    if image_url and (not existing.get('image_url') or image_url != existing.get('image_url')):
+                        price_update['image_url'] = image_url
                     # Backfill thumb_url into product_url if missing
                     ex_url = existing.get('product_url', '')
-                    ex_img = ext_img or existing.get('image_url')
+                    ex_img = image_url or existing.get('image_url')
                     if ex_img and 'thumb_url=' not in (ex_url or ''):
                         price_update['product_url'] = ensure_thumb_url(ex_url, ex_img)
                     Item.update(existing['id'], **price_update)
@@ -546,17 +576,15 @@ def import_items():
                 else:
                     # No price change - but update image if missing/bad, set original_price if unset
                     reimport_updates = {}
-                    ext_image = item_data.get('image_url')
-                    if ext_image and isinstance(ext_image, str) and ext_image.startswith('http'):
-                        cur_image = existing.get('image_url', '')
-                        # Always prefer extension image - it comes from Temu's live API
-                        if not cur_image or ext_image != cur_image:
-                            reimport_updates['image_url'] = ext_image
+                    cur_image = existing.get('image_url', '')
+                    # Update image if we have a valid one and it's different/better
+                    if image_url and (not cur_image or image_url != cur_image):
+                        reimport_updates['image_url'] = image_url
                     if existing.get('original_price') is None and new_price is not None:
                         reimport_updates['original_price'] = new_price
                     # Backfill thumb_url into product_url if missing
                     existing_url = existing.get('product_url', '')
-                    backfill_image = item_data.get('image_url') or existing.get('image_url')
+                    backfill_image = image_url or existing.get('image_url')
                     if backfill_image and 'thumb_url=' not in (existing_url or ''):
                         reimport_updates['product_url'] = ensure_thumb_url(existing_url, backfill_image)
                     if reimport_updates:
@@ -575,45 +603,44 @@ def import_items():
 
             # Create new item - ensure thumb_url is embedded in product_url
             import_url = item_data.get('product_url', '')
-            import_image = item_data.get('image_url')
-            import_url = ensure_thumb_url(import_url, import_image)
+            import_url = ensure_thumb_url(import_url, image_url)
 
-            # Prepare post-create updates (batch into one call to avoid N+1 connections)
-            post_updates = {}
-
-            # If extension sent a separate original_price (higher than sale)
+            # Validate original_price if provided
+            original_price = None
             ext_original = item_data.get('original_price')
-            if ext_original and new_price and ext_original > new_price:
-                post_updates['original_price'] = ext_original
+            if ext_original is not None:
+                try:
+                    original_price = float(ext_original)
+                    if original_price < 0 or original_price > 99999:
+                        original_price = None
+                except (ValueError, TypeError):
+                    original_price = None
 
             # Auto-categorize based on title keywords
-            title = item_data.get('title', 'Unknown Product')
             cat_id = categorize_item_title(title, all_categories)
-            if cat_id:
-                post_updates['category_id'] = cat_id
 
             item = Item.create(
                 store=store,
                 product_id=product_id,
                 product_url=import_url,
                 title=title,
-                image_url=import_image,
+                image_url=image_url,
                 current_price=new_price,
-                quantity=item_data.get('quantity', 1),
+                quantity=quantity,
                 list_id=list_id,
-                category_id=cat_id or 1  # Pass category directly to create
+                category_id=cat_id or 1
             )
 
-            # Apply any additional updates (original_price) in a single call
-            if 'original_price' in post_updates:
-                Item.update(item['id'], original_price=post_updates['original_price'])
+            # Apply original_price if it's higher than sale price
+            if original_price and new_price and original_price > new_price:
+                Item.update(item['id'], original_price=original_price)
 
             results.append({
                 'id': item['id'],
                 'product_id': product_id,
                 'product_url': import_url,
-                'image_url': import_image,
-                'title': item_data.get('title', 'Unknown Product'),
+                'image_url': image_url,
+                'title': title,
                 'status': 'imported'
             })
             imported += 1
