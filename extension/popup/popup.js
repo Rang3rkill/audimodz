@@ -405,21 +405,65 @@ function pickBestPrice(obj) {
   // Flatten nested price containers (Temu cart API nests prices in price_info)
   const pi = obj.price_info || obj.priceInfo || {};
   const ps = pi.price_schema || pi.priceSchema || {};
+
+  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
+  // and Temu's split arrays like ["$","4",".","9","9"]
+  // Returns { value: number, hasDecimalInSource: boolean }
+  function parsePrice(v) {
+    if (v == null) return { value: NaN, hasDecimalInSource: false };
+    if (typeof v === 'number') {
+      // Check if it has a decimal part
+      return { value: v, hasDecimalInSource: v % 1 !== 0 };
+    }
+    if (Array.isArray(v)) {
+      const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
+      if (!joined) return { value: NaN, hasDecimalInSource: false };
+      return { value: parseFloat(joined.replace(/[^0-9.]/g, '')), hasDecimalInSource: joined.includes('.') };
+    }
+    if (typeof v === 'string') {
+      return { value: parseFloat(v.replace(/[^0-9.]/g, '')), hasDecimalInSource: v.includes('.') };
+    }
+    return { value: NaN, hasDecimalInSource: false };
+  }
+
+  // Normalize cents - only if it looks like cents (high integer with no decimal in source)
+  // Threshold: >= 500 cents ($5+) to avoid incorrectly dividing $1-$4 prices
+  // Also never divide if the source had a decimal point (already in dollars)
+  function normalizeCents(val, hasDecimal) {
+    if (val === null || isNaN(val)) return null;
+    // If source had decimal like "$4.99", it's already in dollars
+    if (hasDecimal) return val;
+    // Only divide by 100 if it looks like cents (>=500 and is an integer)
+    // This handles 1299 ($12.99) but not 150 (which could be $150)
+    if (val >= 500 && Number.isInteger(val)) return val / 100;
+    return val;
+  }
+
+  // Explicit cent fields - always divide by 100
+  const centFields = [obj.salePriceCent, obj.priceCent, pi.priceCent, ps.priceCent];
+  for (const v of centFields) {
+    if (v != null && typeof v === 'number' && v > 0) {
+      const best = v / 100;
+      if (best >= 0.01 && best <= 99999) {
+        return { salePrice: best, originalPrice: null };
+      }
+    }
+  }
+
   // Try sale/discount price fields first (the actual price to pay)
   const candidates = [
     pi.price, pi.price_str, pi.priceStr, pi.price_text, pi.split_price_text,
     pi.sale_price, pi.salePrice,
     pi.promo_price, pi.discount_price,
-    obj.sale_price, obj.salePrice, obj.salePriceCent,
-    pi.sale_price, pi.salePrice, ps.sale_price, ps.salePrice,
+    obj.sale_price, obj.salePrice,
+    ps.sale_price, ps.salePrice,
     obj.promo_price, obj.promoPrice,
     pi.promo_price, pi.promoPrice, ps.promo_price, ps.promoPrice,
     obj.discount_price, obj.discountPrice,
     pi.discount_price, pi.discountPrice, ps.discount_price, ps.discountPrice,
     obj.current_price, obj.currentPrice,
     pi.current_price, pi.currentPrice,
-    obj.price, obj.priceCent,
-    pi.price, pi.priceCent, ps.price, ps.priceCent,
+    obj.price, pi.price, ps.price,
   ];
   // Original/market price candidates
   const originalCandidates = [
@@ -429,41 +473,41 @@ function pickBestPrice(obj) {
     obj.original_price, obj.originalPrice,
   ];
 
-  // Parse a price value - handles numbers, "$4.99", "4.99", cent integers,
-  // and Temu's split arrays like ["$","4",".","9","9"]
-  function parsePrice(v) {
-    if (v == null) return NaN;
-    if (typeof v === 'number') return v;
-    if (Array.isArray(v)) {
-      const joined = v.map(x => (typeof x === 'object' && x?.text) ? x.text : String(x ?? '')).join('');
-      if (!joined) return NaN;
-      return parseFloat(joined.replace(/[^0-9.]/g, ''));
-    }
-    if (typeof v === 'string') return parseFloat(v.replace(/[^0-9.]/g, ''));
-    return NaN;
-  }
-
   let best = null;
+  let bestHasDecimal = false;
   for (const v of candidates) {
-    const n = parsePrice(v);
-    if (!isNaN(n) && n > 0) { best = n; break; }
+    const { value: n, hasDecimalInSource } = parsePrice(v);
+    if (!isNaN(n) && n > 0) {
+      best = n;
+      bestHasDecimal = hasDecimalInSource;
+      break;
+    }
   }
   let original = null;
+  let origHasDecimal = false;
   for (const v of originalCandidates) {
-    const n = parsePrice(v);
-    if (!isNaN(n) && n > 0) { original = n; break; }
+    const { value: n, hasDecimalInSource } = parsePrice(v);
+    if (!isNaN(n) && n > 0) {
+      original = n;
+      origHasDecimal = hasDecimalInSource;
+      break;
+    }
   }
   // Fall back: if no explicit original, use highest from all candidates
   if (original === null) {
     for (const v of [...candidates, ...originalCandidates]) {
-      const n = parsePrice(v);
-      if (!isNaN(n) && n > 0 && (original === null || n > original)) original = n;
+      const { value: n, hasDecimalInSource } = parsePrice(v);
+      if (!isNaN(n) && n > 0 && (original === null || n > original)) {
+        original = n;
+        origHasDecimal = hasDecimalInSource;
+      }
     }
   }
 
-  // Normalize cents (Temu sometimes returns 1299 meaning $12.99)
-  if (best !== null && best > 100 && Number.isInteger(best)) best = best / 100;
-  if (original !== null && original > 100 && Number.isInteger(original)) original = original / 100;
+  // Normalize cents using improved logic
+  best = normalizeCents(best, bestHasDecimal);
+  original = normalizeCents(original, origHasDecimal);
+
   // Validate range
   if (best !== null && (best < 0.01 || best > 99999)) best = null;
   if (original !== null && (original < 0.01 || original > 99999)) original = null;
@@ -693,9 +737,14 @@ async function scrapeTemuAllTabs() {
               scriptUrl += '&thumb_url=' + encodeURIComponent(scriptImage);
             }
             // Normalize price - Temu JS often stores cents (e.g. 1299 = $12.99)
+            // Only divide if >= 500 and is integer (avoids incorrectly dividing $150 to $1.50)
             let scriptPrice = priceMatch ? parseFloat(priceMatch[1]) : null;
-            if (scriptPrice && scriptPrice > 100 && Number.isInteger(scriptPrice)) {
+            if (scriptPrice && scriptPrice >= 500 && Number.isInteger(scriptPrice)) {
               scriptPrice = scriptPrice / 100;
+            }
+            // Validate price range
+            if (scriptPrice && (scriptPrice < 0.01 || scriptPrice > 99999)) {
+              scriptPrice = null;
             }
             allItems.set(goodsId, {
               product_id: goodsId,
