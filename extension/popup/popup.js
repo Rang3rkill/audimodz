@@ -178,21 +178,48 @@ async function importCart() {
 
     elements.importBtn.textContent = `Importing ${items.length} items...`;
 
-    // Send to wishlist app
-    const listId = parseInt(elements.listSelect.value);
-    const response = await fetch(`${API_BASE}/api/items/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        store: currentStore.key,
-        items: items,
-        list_id: listId,
-      }),
-    });
+    // Send to wishlist app with retry logic
+    const listId = parseInt(elements.listSelect.value) || 1;
+    let response;
+    let lastError;
 
-    if (!response.ok) throw new Error('Failed to import items');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        response = await fetch(`${API_BASE}/api/items/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            store: currentStore.key,
+            items: items,
+            list_id: listId,
+          }),
+        });
+        if (response.ok) {
+          lastError = null;
+          break;
+        } else {
+          lastError = new Error(`Server error: ${response.status}`);
+        }
+      } catch (e) {
+        lastError = e;
+        console.warn(`[Judi's Wishlist] Import attempt ${attempt} failed:`, e.message);
+      }
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, attempt * 2000));
+        elements.importBtn.textContent = `Retrying (${attempt}/3)...`;
+      }
+    }
 
-    const data = await response.json();
+    if (lastError || !response?.ok) {
+      throw new Error(lastError?.message || 'Failed to import items after 3 attempts');
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error('Invalid response from server')
+    }
     const scrapeStats = items._stats || null;
 
     // Build result message
@@ -1545,21 +1572,48 @@ async function importFromShareLink() {
 
     elements.shareImportBtn.textContent = `Importing ${items.length} items...`;
 
-    // Send to wishlist app
-    const listId = parseInt(elements.shareListSelect.value);
-    const response = await fetch(`${API_BASE}/api/items/import`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        store: 'temu',
-        items: items,
-        list_id: listId,
-      }),
-    });
+    // Send to wishlist app with retry logic
+    const listId = parseInt(elements.shareListSelect.value) || 1;
+    let response;
+    let lastError;
 
-    if (!response.ok) throw new Error('Failed to import items');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        response = await fetch(`${API_BASE}/api/items/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            store: 'temu',
+            items: items,
+            list_id: listId,
+          }),
+        });
+        if (response.ok) {
+          lastError = null;
+          break;
+        } else {
+          lastError = new Error(`Server error: ${response.status}`);
+        }
+      } catch (e) {
+        lastError = e;
+        console.warn(`[Judi's Wishlist] Share import attempt ${attempt} failed:`, e.message);
+      }
+      if (attempt < 3) {
+        await new Promise(r => setTimeout(r, attempt * 2000));
+        elements.shareImportBtn.textContent = `Retrying (${attempt}/3)...`;
+      }
+    }
 
-    const data = await response.json();
+    if (lastError || !response?.ok) {
+      throw new Error(lastError?.message || 'Failed to import items after 3 attempts');
+    }
+
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      throw new Error('Invalid response from server')
+    }
     const scrapeStats = items._stats || null;
 
     // Build result message

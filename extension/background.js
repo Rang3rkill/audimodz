@@ -519,24 +519,54 @@ async function executeImageScrape(tabId) {
 // IMPORT: Send items to wishlist app, then auto-fix images
 // ============================================================
 async function handleImport(data) {
-  const response = await fetch(`${API_BASE}/api/items/import`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
+  // Retry up to 3 times with exponential backoff for network failures
+  let response;
+  let lastError;
 
-  if (!response.ok) {
-    throw new Error('Failed to import items');
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      response = await fetch(`${API_BASE}/api/items/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => 'Unknown error');
+        throw new Error(`Server error ${response.status}: ${errText}`);
+      }
+
+      // Success
+      lastError = null;
+      break;
+    } catch (e) {
+      lastError = e;
+      console.warn(`[Judi's Wishlist] Import attempt ${attempt} failed: ${e.message}`);
+      if (attempt < 3) {
+        await sleep(attempt * 2000); // 2s, 4s backoff
+      }
+    }
   }
 
-  const result = await response.json();
+  if (lastError) {
+    throw new Error(`Import failed after 3 attempts: ${lastError.message}`);
+  }
+
+  let result;
+  try {
+    result = await response.json();
+  } catch (e) {
+    console.error('[Judi\'s Wishlist] Failed to parse import response:', e);
+    throw new Error('Invalid server response');
+  }
 
   // After import, auto-fix images for items that don't have good ones.
   // Filter to only items that actually need fixing (not all imported items).
-  if (result.items && result.items.length > 0) {
-    const itemsToFix = result.items
+  const items = Array.isArray(result?.items) ? result.items : [];
+  if (items.length > 0) {
+    const itemsToFix = items
       .filter(i => {
-        if (!i.product_url || !i.product_url.includes('temu.com')) return false;
+        if (!i || !i.product_url || !i.product_url.includes('temu.com')) return false;
         const img = i.image_url || '';
         if (!img) return true;
         return !isGoodImageUrl(img);
@@ -545,17 +575,17 @@ async function handleImport(data) {
         id: i.id,
         product_url: i.product_url,
         image_url: i.image_url,
-        title: i.title,
+        title: i.title || '',
       }));
 
     if (itemsToFix.length > 0) {
-      console.log(`[Judi's Wishlist] Post-import: ${itemsToFix.length} of ${result.items.length} items need image fix`);
+      console.log(`[Judi's Wishlist] Post-import: ${itemsToFix.length} of ${items.length} items need image fix`);
       // Don't await — let it run in background
       fixMissingImages('import', itemsToFix)
         .then(s => console.log(`[Judi's Wishlist] Post-import image fix done:`, s))
         .catch(e => console.error(`[Judi's Wishlist] Post-import image fix error:`, e));
     } else {
-      console.log(`[Judi's Wishlist] Post-import: all ${result.items.length} items already have good images`);
+      console.log(`[Judi's Wishlist] Post-import: all ${items.length} items already have good images`);
     }
   }
 

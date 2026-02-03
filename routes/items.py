@@ -465,13 +465,21 @@ def create_backup():
 @items_bp.route('/import', methods=['POST'])
 def import_items():
     """Bulk import items from extension."""
-    data = request.get_json()
+    data = request.get_json() or {}
     store = data.get('store')
     items_data = data.get('items', [])
     list_id = data.get('list_id', 1)
 
     if not store:
         return jsonify({'error': 'store is required'}), 400
+
+    if not isinstance(items_data, list):
+        return jsonify({'error': 'items must be an array'}), 400
+
+    # Validate list_id exists (use 1 if not found)
+    from models.list import List
+    if List.get_by_id(list_id) is None:
+        list_id = 1
 
     results = []
     imported = 0
@@ -570,28 +578,35 @@ def import_items():
             import_image = item_data.get('image_url')
             import_url = ensure_thumb_url(import_url, import_image)
 
+            # Prepare post-create updates (batch into one call to avoid N+1 connections)
+            post_updates = {}
+
+            # If extension sent a separate original_price (higher than sale)
+            ext_original = item_data.get('original_price')
+            if ext_original and new_price and ext_original > new_price:
+                post_updates['original_price'] = ext_original
+
+            # Auto-categorize based on title keywords
+            title = item_data.get('title', 'Unknown Product')
+            cat_id = categorize_item_title(title, all_categories)
+            if cat_id:
+                post_updates['category_id'] = cat_id
+
             item = Item.create(
                 store=store,
                 product_id=product_id,
                 product_url=import_url,
-                title=item_data.get('title', 'Unknown Product'),
+                title=title,
                 image_url=import_image,
                 current_price=new_price,
                 quantity=item_data.get('quantity', 1),
-                list_id=list_id
+                list_id=list_id,
+                category_id=cat_id or 1  # Pass category directly to create
             )
 
-            # If extension sent a separate original_price (higher than sale),
-            # update it so price drop display works correctly
-            ext_original = item_data.get('original_price')
-            if ext_original and new_price and ext_original > new_price:
-                Item.update(item['id'], original_price=ext_original)
-
-            # Auto-categorize based on title keywords
-            title = item_data.get('title', '')
-            cat_id = categorize_item_title(title, all_categories)
-            if cat_id:
-                Item.update(item['id'], category_id=cat_id)
+            # Apply any additional updates (original_price) in a single call
+            if 'original_price' in post_updates:
+                Item.update(item['id'], original_price=post_updates['original_price'])
 
             results.append({
                 'id': item['id'],
