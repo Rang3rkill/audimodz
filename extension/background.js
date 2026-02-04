@@ -492,6 +492,13 @@ async function executeImageScrape(tabId) {
         // This prevents picking up images from "similar items" recommendations
         const pageText = (document.body?.innerText || '').toLowerCase();
 
+        // Check if we were redirected to a search/browse page (item doesn't exist)
+        const isSearchPage = pageUrl.includes('/search') || pageUrl.includes('/browse') ||
+          pageUrl.includes('search_key=') || pageUrl.includes('/category/');
+        if (isSearchPage) {
+          return { imageUrl: null, isSoldOut: true }; // Item doesn't exist, treat as sold out
+        }
+
         // Look for definitive sold-out indicators
         const soldOutTextPatterns = [
           'this item is sold out',
@@ -502,6 +509,9 @@ async function executeImageScrape(tabId) {
           'item is no longer available',
           'product is unavailable',
           'sorry, this item',  // "Sorry, this item is no longer available"
+          'this product is not available',
+          'item has been removed',
+          'product has been removed',
         ];
         const hasSoldOutText = soldOutTextPatterns.some(pattern => pageText.includes(pattern));
 
@@ -511,6 +521,7 @@ async function executeImageScrape(tabId) {
           '[class*="out-of-stock"]', '[class*="outOfStock"]', '[class*="OutOfStock"]',
           '[class*="item-unavailable"]', '[class*="itemUnavailable"]',
           '[class*="product-unavailable"]', '[class*="productUnavailable"]',
+          '[class*="goods-removed"]', '[class*="goodsRemoved"]',
         ];
         const hasSoldOutElement = soldOutSelectors.some(sel => {
           try { return document.querySelector(sel) !== null; } catch { return false; }
@@ -525,21 +536,43 @@ async function executeImageScrape(tabId) {
 
         const BAD_PATTERNS = ['/sale', '/banner', '/promo', '/countdown', '/clock', '/timer',
           'sale_banner', 'flash_sale', 'promotion', 'coupon', '/bg/', '/background/',
-          'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/', '/icon/', '/logo/'];
+          'placeholder', 'upload_aimg', '/aimg/', '/splash/', '/event/', '/icon/', '/logo/',
+          '/avatar/', '/user/', '/profile/', '/seller/', '/store/', '/shop-logo/',
+          '/recommend/', '/similar/', '/also-like/', '/you-may/', '/trending/'];
 
         function isGoodImage(url) {
           if (!url || typeof url !== 'string' || !url.startsWith('http')) return false;
+          if (url.length < 50) return false; // Product images have longer URLs
           const lower = url.toLowerCase();
           for (const p of BAD_PATTERNS) {
             if (lower.includes(p)) return false;
           }
           // Must look like a product image CDN
           const hasCDN = lower.includes('kwcdn') || lower.includes('akamaized') ||
-            lower.includes('temu') || lower.includes('cloudfront') ||
-            lower.includes('cdn') || lower.includes('img.');
+            lower.includes('cloudfront');
           if (!hasCDN) return false;
-          if (url.length < 30) return false;
+          // Should contain product-like path patterns
+          const hasProductPath = lower.includes('/product/') || lower.includes('/goods/') ||
+            lower.includes('/fancy/') || lower.includes('/open/') || lower.includes('.jpg') ||
+            lower.includes('.png') || lower.includes('.webp');
+          if (!hasProductPath) return false;
           return true;
+        }
+
+        // Check if an image element is in a recommendations/similar items section
+        function isInRecommendationSection(img) {
+          let el = img;
+          for (let i = 0; i < 10 && el; i++) {
+            const cls = (el.className || '').toLowerCase();
+            const id = (el.id || '').toLowerCase();
+            if (cls.includes('recommend') || cls.includes('similar') || cls.includes('also-like') ||
+                cls.includes('you-may') || cls.includes('related') || cls.includes('trending') ||
+                id.includes('recommend') || id.includes('similar')) {
+              return true;
+            }
+            el = el.parentElement;
+          }
+          return false;
         }
 
         // Clean a URL found in scripts (unescape unicode, fix slashes)
@@ -593,23 +626,25 @@ async function executeImageScrape(tabId) {
         }
 
         // 4. Visible product images on the page (gallery, main image)
+        // These selectors target the MAIN product image area, not recommendations
         const gallerySelectors = [
-          // High-confidence product image locations
-          '[class*="gallery"] img[src*="kwcdn"]',
-          '[class*="gallery"] img[src*="akamaized"]',
-          '[class*="Gallery"] img[src*="kwcdn"]',
-          '[class*="Gallery"] img[src*="akamaized"]',
-          '[class*="product-image"] img', '[class*="ProductImage"] img',
-          '[class*="goodsImage"] img', '[class*="mainImage"] img',
-          '[class*="MainImage"] img', '[class*="detail-gallery"] img',
-          'img[data-not-lazy][src*="kwcdn"]',
-          'img[data-not-lazy][src*="akamaized"]',
-          '.product-img img', '.goods-img img',
+          // High-confidence product image locations (main gallery only)
+          '[class*="detail-gallery"] img[src*="kwcdn"]',
+          '[class*="detail-gallery"] img[src*="akamaized"]',
+          '[class*="DetailGallery"] img[src*="kwcdn"]',
+          '[class*="product-gallery"] img[src*="kwcdn"]',
+          '[class*="ProductGallery"] img[src*="kwcdn"]',
+          '[class*="goods-gallery"] img[src*="kwcdn"]',
+          '[class*="mainImage"] img', '[class*="MainImage"] img',
+          '[class*="main-image"] img', '[class*="goodsImage"] img',
+          '[class*="product-image"]:not([class*="recommend"]) img',
         ];
 
         for (const selector of gallerySelectors) {
           try {
             for (const img of document.querySelectorAll(selector)) {
+              // Skip images in recommendation sections
+              if (isInRecommendationSection(img)) continue;
               const src = img.src || img.dataset?.src || img.getAttribute('data-origin-src') || '';
               if (isGoodImage(src)) return { imageUrl: src, isSoldOut: false };
               // Check srcset for high-res version
@@ -622,28 +657,34 @@ async function executeImageScrape(tabId) {
           } catch {}
         }
 
-        // 5. Any visible CDN image on the page with reasonable size
-        for (const img of document.querySelectorAll('img')) {
+        // 5. First large CDN image NOT in recommendations (stricter filtering)
+        for (const img of document.querySelectorAll('img[src*="kwcdn"], img[src*="akamaized"]')) {
+          if (isInRecommendationSection(img)) continue;
           const src = img.src;
           if (!isGoodImage(src)) continue;
           const w = img.naturalWidth || parseInt(img.width) || 0;
           const h = img.naturalHeight || parseInt(img.height) || 0;
-          // Accept if dimensions available and large enough, OR if we can't check
-          if ((w > 80 && h > 80) || (w === 0 && h === 0)) return { imageUrl: src, isSoldOut: false };
+          // Only accept if dimensions are large enough (main product images are big)
+          if (w > 150 && h > 150) return { imageUrl: src, isSoldOut: false };
         }
 
-        // 6. data-src / lazy-loaded images
+        // 6. data-src / lazy-loaded images (not in recommendations)
         for (const img of document.querySelectorAll('img[data-src], img[data-origin-src]')) {
+          if (isInRecommendationSection(img)) continue;
           const src = img.dataset.src || img.getAttribute('data-origin-src') || '';
           if (isGoodImage(src)) return { imageUrl: src, isSoldOut: false };
         }
 
-        // 7. CSS background images from product containers
-        const bgSelectors = ['[class*="product"]', '[class*="goods"]', '[class*="gallery"]',
-          '[class*="image-container"]', '[class*="thumb"]', '[class*="main-pic"]'];
+        // 7. CSS background images from MAIN product containers only
+        const bgSelectors = [
+          '[class*="detail-gallery"]', '[class*="DetailGallery"]',
+          '[class*="product-gallery"]', '[class*="ProductGallery"]',
+          '[class*="main-image"]', '[class*="mainImage"]',
+        ];
         for (const sel of bgSelectors) {
           try {
             for (const el of document.querySelectorAll(sel)) {
+              if (isInRecommendationSection(el)) continue;
               const bg = getComputedStyle(el).backgroundImage;
               if (bg && bg !== 'none') {
                 const match = bg.match(/url\(["']?(https?:\/\/[^"')]+)/);
