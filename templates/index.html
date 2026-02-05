@@ -143,6 +143,7 @@
 
 <button id="addItemBtn" class="fab" title="Add Item">+</button>
 <button id="importLinkBtn" class="fab fab-import" title="Import from Link">&#128279;</button>
+<button id="scanBarcodeBtn" class="fab fab-scan" title="Scan Barcode">&#128247;</button>
 
 <!-- Import from Link Modal -->
 <div id="importLinkModal" class="modal hidden">
@@ -257,6 +258,61 @@
         <div class="modal-footer">
             <button id="confirmDeleteCancel" class="btn btn-secondary">Cancel</button>
             <button id="confirmDeleteConfirm" class="btn btn-danger">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- Barcode Scanner Modal -->
+<div id="scannerModal" class="modal hidden">
+    <div class="modal-content modal-scanner">
+        <div class="modal-header">
+            <h2>&#128247; Scan Barcode</h2>
+            <button class="close-btn" data-close="scannerModal">&times;</button>
+        </div>
+        <div class="modal-body scanner-body">
+            <div class="scanner-instructions">
+                <p>Position the barcode inside the frame. Hold steady for best results.</p>
+                <p class="scanner-tip">Works best with yellow price tags - hold camera 4-6 inches away</p>
+            </div>
+            <div id="scannerViewport" class="scanner-viewport">
+                <div class="scanner-loading" id="scannerLoading">
+                    <div class="scanner-spinner"></div>
+                    <p>Starting camera...</p>
+                </div>
+            </div>
+            <div id="scannerStatus" class="scanner-status scanner-status-info">
+                Point camera at barcode
+            </div>
+            <div class="scanner-controls">
+                <button id="switchCameraBtn" class="btn btn-secondary btn-small" title="Switch Camera">
+                    &#128257; Flip
+                </button>
+                <button id="optimizeSlimBtn" class="btn btn-info btn-small" title="Optimize for slim barcodes">
+                    &#9881; Slim Mode
+                </button>
+                <button id="manualEntryBtn" class="btn btn-secondary btn-small" title="Enter manually">
+                    &#9997; Manual
+                </button>
+            </div>
+            <div class="scanner-results hidden" id="scannerResults">
+                <div class="result-label">Last Scanned:</div>
+                <div class="result-code" id="scannedCode"></div>
+                <div class="result-actions">
+                    <button id="searchScannedBtn" class="btn btn-primary">Search Product</button>
+                    <button id="copyScannedBtn" class="btn btn-secondary">Copy</button>
+                </div>
+            </div>
+            <!-- Manual Entry Section -->
+            <div class="manual-entry hidden" id="manualEntry">
+                <div class="form-group">
+                    <label for="manualBarcodeInput">Enter Barcode Manually</label>
+                    <input type="text" id="manualBarcodeInput" placeholder="Type or paste barcode number...">
+                </div>
+                <div class="manual-entry-actions">
+                    <button id="submitManualBtn" class="btn btn-primary">Submit</button>
+                    <button id="cancelManualBtn" class="btn btn-secondary">Back to Scanner</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>

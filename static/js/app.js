@@ -181,6 +181,23 @@ const App = {
             batchDelete: document.getElementById('batchDelete'),
             exitSelectMode: document.getElementById('exitSelectMode'),
             // (Export and price check moved to /admin page)
+            // Barcode Scanner
+            scanBarcodeBtn: document.getElementById('scanBarcodeBtn'),
+            scannerModal: document.getElementById('scannerModal'),
+            scannerViewport: document.getElementById('scannerViewport'),
+            scannerLoading: document.getElementById('scannerLoading'),
+            scannerStatus: document.getElementById('scannerStatus'),
+            scannerResults: document.getElementById('scannerResults'),
+            scannedCode: document.getElementById('scannedCode'),
+            switchCameraBtn: document.getElementById('switchCameraBtn'),
+            optimizeSlimBtn: document.getElementById('optimizeSlimBtn'),
+            manualEntryBtn: document.getElementById('manualEntryBtn'),
+            manualEntry: document.getElementById('manualEntry'),
+            manualBarcodeInput: document.getElementById('manualBarcodeInput'),
+            submitManualBtn: document.getElementById('submitManualBtn'),
+            cancelManualBtn: document.getElementById('cancelManualBtn'),
+            searchScannedBtn: document.getElementById('searchScannedBtn'),
+            copyScannedBtn: document.getElementById('copyScannedBtn'),
         };
     },
 
@@ -217,6 +234,49 @@ const App = {
 
         this.elements.importLinkInput?.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.importFromLink();
+        });
+
+        // Barcode Scanner
+        this.elements.scanBarcodeBtn?.addEventListener('click', () => {
+            this.openScanner();
+        });
+
+        this.elements.switchCameraBtn?.addEventListener('click', () => {
+            this.switchScannerCamera();
+        });
+
+        this.elements.optimizeSlimBtn?.addEventListener('click', () => {
+            this.toggleSlimMode();
+        });
+
+        this.elements.manualEntryBtn?.addEventListener('click', () => {
+            this.showManualEntry();
+        });
+
+        this.elements.cancelManualBtn?.addEventListener('click', () => {
+            this.hideManualEntry();
+        });
+
+        this.elements.submitManualBtn?.addEventListener('click', () => {
+            this.submitManualBarcode();
+        });
+
+        this.elements.manualBarcodeInput?.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.submitManualBarcode();
+        });
+
+        this.elements.searchScannedBtn?.addEventListener('click', () => {
+            this.searchScannedBarcode();
+        });
+
+        this.elements.copyScannedBtn?.addEventListener('click', () => {
+            this.copyScannedBarcode();
+        });
+
+        this.elements.scannerModal?.addEventListener('click', (e) => {
+            if (e.target === this.elements.scannerModal) {
+                this.closeScanner();
+            }
         });
 
         // Close modal
@@ -2292,6 +2352,185 @@ const App = {
     // ==========================================
 
     // (Export and price check moved to /admin page)
+
+    // ==========================================
+    // BARCODE SCANNER
+    // ==========================================
+
+    // Scanner state
+    scannerActive: false,
+    slimModeEnabled: false,
+    lastScannedCode: null,
+
+    async openScanner() {
+        if (!this.elements.scannerModal) return;
+
+        // Show modal
+        this.elements.scannerModal.classList.remove('hidden');
+        this.elements.scannerLoading?.classList.remove('hidden');
+        this.elements.scannerResults?.classList.add('hidden');
+        this.elements.manualEntry?.classList.add('hidden');
+
+        // Check for camera support
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            this.showScannerError('Camera not supported on this device');
+            return;
+        }
+
+        try {
+            // Initialize scanner
+            await BarcodeScanner.init(
+                this.elements.scannerViewport,
+                (result) => this.handleScanResult(result),
+                (error) => this.handleScanError(error)
+            );
+
+            // Enable slim mode by default for yellow tags
+            BarcodeScanner.optimizeForSlimBarcodes();
+            this.slimModeEnabled = true;
+            this.elements.optimizeSlimBtn?.classList.add('slim-mode-active');
+
+            BarcodeScanner.start();
+            this.scannerActive = true;
+            this.elements.scannerLoading?.classList.add('hidden');
+
+        } catch (error) {
+            console.error('Scanner init failed:', error);
+            this.showScannerError('Could not start camera. Please check permissions.');
+        }
+    },
+
+    closeScanner() {
+        if (BarcodeScanner.isInitialized) {
+            BarcodeScanner.destroy();
+        }
+        this.scannerActive = false;
+        this.elements.scannerModal?.classList.add('hidden');
+    },
+
+    handleScanResult(result) {
+        if (!result || !result.code) return;
+
+        this.lastScannedCode = result.code;
+
+        // Show results
+        if (this.elements.scannedCode) {
+            this.elements.scannedCode.textContent = result.code;
+        }
+        this.elements.scannerResults?.classList.remove('hidden');
+
+        console.log('Barcode scanned:', result.code, 'Format:', result.format);
+    },
+
+    handleScanError(error) {
+        console.error('Scan error:', error);
+        this.showScannerError('Scanner error: ' + (error.message || error));
+    },
+
+    showScannerError(message) {
+        this.elements.scannerLoading?.classList.add('hidden');
+        if (this.elements.scannerStatus) {
+            this.elements.scannerStatus.textContent = message;
+            this.elements.scannerStatus.className = 'scanner-status scanner-status-error';
+        }
+    },
+
+    async switchScannerCamera() {
+        if (!BarcodeScanner.isInitialized) return;
+
+        this.elements.scannerLoading?.classList.remove('hidden');
+        try {
+            await BarcodeScanner.switchCamera();
+            this.elements.scannerLoading?.classList.add('hidden');
+        } catch (error) {
+            this.showScannerError('Could not switch camera');
+        }
+    },
+
+    toggleSlimMode() {
+        this.slimModeEnabled = !this.slimModeEnabled;
+
+        if (this.slimModeEnabled) {
+            BarcodeScanner.optimizeForSlimBarcodes();
+            this.elements.optimizeSlimBtn?.classList.add('slim-mode-active');
+            this.showToast('Slim barcode mode enabled', 'success');
+        } else {
+            BarcodeScanner.resetSettings();
+            this.elements.optimizeSlimBtn?.classList.remove('slim-mode-active');
+            this.showToast('Standard mode enabled', 'success');
+        }
+    },
+
+    showManualEntry() {
+        // Pause scanner while entering manually
+        if (BarcodeScanner.isScanning) {
+            BarcodeScanner.stop();
+        }
+        this.elements.manualEntry?.classList.remove('hidden');
+        this.elements.manualBarcodeInput?.focus();
+    },
+
+    hideManualEntry() {
+        this.elements.manualEntry?.classList.add('hidden');
+        this.elements.manualBarcodeInput.value = '';
+        // Resume scanner
+        if (BarcodeScanner.isInitialized) {
+            BarcodeScanner.start();
+        }
+    },
+
+    submitManualBarcode() {
+        const code = this.elements.manualBarcodeInput?.value.trim();
+        if (!code) {
+            this.showToast('Please enter a barcode', 'error');
+            return;
+        }
+
+        this.lastScannedCode = code;
+
+        // Show results
+        if (this.elements.scannedCode) {
+            this.elements.scannedCode.textContent = code;
+        }
+        this.elements.scannerResults?.classList.remove('hidden');
+        this.elements.manualEntry?.classList.add('hidden');
+        this.elements.manualBarcodeInput.value = '';
+
+        this.showToast('Barcode entered: ' + code, 'success');
+    },
+
+    searchScannedBarcode() {
+        if (!this.lastScannedCode) return;
+
+        // Search for the barcode in the search input
+        this.closeScanner();
+
+        // Search in the app
+        if (this.elements.searchInput) {
+            this.elements.searchInput.value = this.lastScannedCode;
+            this.handleSearch(this.lastScannedCode);
+        }
+
+        this.showToast('Searching for: ' + this.lastScannedCode, 'success');
+    },
+
+    async copyScannedBarcode() {
+        if (!this.lastScannedCode) return;
+
+        try {
+            await navigator.clipboard.writeText(this.lastScannedCode);
+            this.showToast('Barcode copied to clipboard', 'success');
+        } catch (error) {
+            // Fallback for older browsers
+            const input = document.createElement('input');
+            input.value = this.lastScannedCode;
+            document.body.appendChild(input);
+            input.select();
+            document.execCommand('copy');
+            document.body.removeChild(input);
+            this.showToast('Barcode copied', 'success');
+        }
+    },
 
     // Helper: escape HTML
     escapeHtml(str) {
