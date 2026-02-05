@@ -99,8 +99,49 @@ class Item:
             conn.close()
 
     @staticmethod
+    def get_by_part_number(part_number):
+        """Get an item by part number (for industrial parts like Kimball Midwest)."""
+        if not part_number:
+            return None
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            # Case-insensitive search for part numbers
+            cursor.execute('''
+                SELECT i.*, c.name as category_name, l.name as list_name
+                FROM items i
+                LEFT JOIN categories c ON i.category_id = c.id
+                LEFT JOIN lists l ON i.list_id = l.id
+                WHERE UPPER(i.part_number) = UPPER(?)
+            ''', (str(part_number),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    @staticmethod
+    def search_by_part_number(part_number):
+        """Search for items with part numbers containing the search term."""
+        if not part_number:
+            return []
+        conn = get_db_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT i.*, c.name as category_name, l.name as list_name
+                FROM items i
+                LEFT JOIN categories c ON i.category_id = c.id
+                LEFT JOIN lists l ON i.list_id = l.id
+                WHERE i.part_number LIKE ?
+                ORDER BY i.part_number
+            ''', (f'%{part_number}%',))
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    @staticmethod
     def create(store, product_id, product_url, title, image_url=None,
-               current_price=None, quantity=1, category_id=1, list_id=1):
+               current_price=None, quantity=1, category_id=1, list_id=1, part_number=None):
         """Create a new item."""
         conn = get_db_connection()
         try:
@@ -121,14 +162,16 @@ class Item:
                 INSERT INTO items (
                     store, product_id, product_url, title, image_url,
                     current_price, original_price, quantity, piece_count,
-                    category_id, list_id, position, price_updated_at, last_checked
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    category_id, list_id, position, price_updated_at, last_checked,
+                    part_number
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 store, str(product_id), product_url, title, image_url,
                 current_price, current_price, quantity, piece_count,
                 category_id, list_id, position,
                 now if current_price is not None else None,
-                now
+                now,
+                part_number
             ))
 
             item_id = cursor.lastrowid
@@ -149,7 +192,7 @@ class Item:
                 'quantity', 'category_id', 'list_id', 'position',
                 'in_ready_to_buy', 'is_unavailable', 'last_price',
                 'price_updated_at', 'last_checked', 'notes', 'is_favorite',
-                'product_url', 'scrape_fail_count',
+                'product_url', 'scrape_fail_count', 'part_number',
             }
 
             updates = []

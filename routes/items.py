@@ -686,6 +686,11 @@ def import_items():
             # Auto-categorize based on title keywords
             cat_id = categorize_item_title(title, all_categories)
 
+            # Extract part_number for Kimball items
+            part_number = item_data.get('part_number')
+            if not part_number and store == 'kimball':
+                part_number = extract_kimball_part_number(product_id) or product_id
+
             item = Item.create(
                 store=store,
                 product_id=product_id,
@@ -695,7 +700,8 @@ def import_items():
                 current_price=new_price,
                 quantity=quantity,
                 list_id=list_id,
-                category_id=cat_id or 1
+                category_id=cat_id or 1,
+                part_number=part_number
             )
 
             # Apply original_price if it's higher than sale price
@@ -944,6 +950,13 @@ def refresh_item(item_id):
     if 'temu' in store.lower() or 'temu.com' in product_url:
         try:
             scraped = scrape_temu_product(product_url)
+        except Exception as e:
+            return jsonify({'error': f'Scraping failed: {str(e)}'}), 500
+    elif 'kimball' in store.lower() or 'kimballmidwest.com' in product_url:
+        try:
+            # For Kimball, use part_number if available
+            part_number = item.get('part_number') or item.get('product_id')
+            scraped = scrape_kimball_product(part_number or product_url)
         except Exception as e:
             return jsonify({'error': f'Scraping failed: {str(e)}'}), 500
     else:
@@ -2112,4 +2125,334 @@ def auto_categorize():
         ] if dry_run else [],
         'moves': moves[:100],  # Limit response size
         'total_items': len(all_items),
+    })
+
+
+# ============================================================
+# KIMBALL MIDWEST SUPPORT
+# ============================================================
+# Industrial parts catalog support. Kimball Midwest parts are identified
+# by part numbers (e.g., "KM11234") which can be scanned via barcode.
+# This enables barcode-based inventory lookup.
+
+def extract_kimball_part_number(url_or_text):
+    """Extract Kimball Midwest part number from URL or text.
+
+    Part numbers typically follow patterns like:
+    - KM followed by digits (e.g., KM11234)
+    - Just digits for catalog items (e.g., 11234)
+    - URL patterns from catalog.kimballmidwest.com
+    """
+    if not url_or_text:
+        return None
+
+    text = str(url_or_text).upper()
+
+    # Pattern 1: KM followed by digits
+    match = re.search(r'KM[\-_]?(\d{4,8})', text)
+    if match:
+        return f"KM{match.group(1)}"
+
+    # Pattern 2: URL with product/item ID
+    match = re.search(r'/product[s]?/(\d+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+
+    # Pattern 3: URL with item parameter
+    match = re.search(r'[?&]item[_-]?(?:id)?=([A-Z0-9\-]+)', text, re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+
+    # Pattern 4: Pure numeric part number (5-8 digits)
+    match = re.search(r'\b(\d{5,8})\b', text)
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def is_valid_kimball_image(url):
+    """Check if an image URL is a valid Kimball Midwest product image."""
+    if not url:
+        return False
+    url_lower = url.lower()
+    # Must be from Kimball or common CDN domains
+    if not any(domain in url_lower for domain in ['kimball', 'cloudfront', 'cdn', 'img.', 'images.']):
+        return False
+    # Reject placeholder patterns
+    for pattern in ['/placeholder', '/noimage', '/default', '/blank']:
+        if pattern in url_lower:
+            return False
+    return len(url) > 20
+
+
+@retry_on_failure(max_retries=3, delay=2)
+def scrape_kimball_product(url_or_part_number):
+    """Scrape product data from Kimball Midwest catalog.
+
+    Accepts either a full URL or a part number. For part numbers,
+    constructs the catalog URL automatically.
+    """
+    rate_limit_scrape()
+
+    part_number = extract_kimball_part_number(url_or_part_number)
+
+    # Construct URL if we have a part number
+    if part_number and not url_or_part_number.startswith('http'):
+        url = f'https://catalog.kimballmidwest.com/search?q={part_number}'
+    else:
+        url = url_or_part_number
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    }
+
+    data = {}
+
+    try:
+        response = requests.get(url, headers=headers, timeout=20)
+        response.raise_for_status()
+        html = response.text
+
+        # Extract part number if not already found
+        if not part_number:
+            part_number = extract_kimball_part_number(html)
+
+        if part_number:
+            data['part_number'] = part_number
+            data['product_id'] = part_number
+
+        # Extract title - multiple patterns for Kimball catalog
+        title_patterns = [
+            r'<h1[^>]*class="[^"]*product[^"]*"[^>]*>([^<]+)</h1>',
+            r'<meta property="og:title" content="([^"]+)"',
+            r'"product_name"\s*:\s*"([^"]+)"',
+            r'"name"\s*:\s*"([^"]+)"',
+            r'<title>([^<|]+)',
+            r'"itemName"\s*:\s*"([^"]+)"',
+            r'class="product-title"[^>]*>([^<]+)<',
+        ]
+        for pattern in title_patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                title = match.group(1).strip()
+                # Clean up title
+                title = re.sub(r'\s+', ' ', title)
+                title = title.replace('|', '-').replace('  ', ' ')
+                if len(title) > 5 and len(title) < 300:
+                    data['title'] = title
+                    break
+
+        # Extract image URL
+        image_patterns = [
+            r'<meta property="og:image" content="([^"]+)"',
+            r'"image"\s*:\s*"(https?:[^"]+)"',
+            r'"productImage"\s*:\s*"(https?:[^"]+)"',
+            r'<img[^>]+class="[^"]*product[^"]*"[^>]+src="([^"]+)"',
+            r'<img[^>]+src="([^"]+)"[^>]+class="[^"]*product',
+            r'<img[^>]+data-src="([^"]+)"[^>]*>',
+        ]
+        for pattern in image_patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                img_url = match.group(1)
+                if img_url.startswith('//'):
+                    img_url = 'https:' + img_url
+                if is_valid_kimball_image(img_url):
+                    data['image_url'] = img_url
+                    break
+
+        # Extract price
+        price_patterns = [
+            r'"price"\s*:\s*"?\$?(\d+\.?\d*)"?',
+            r'"amount"\s*:\s*"?(\d+\.?\d*)"?',
+            r'class="[^"]*price[^"]*"[^>]*>\$?(\d+\.?\d*)',
+            r'\$(\d+\.?\d{2})',
+        ]
+        for pattern in price_patterns:
+            matches = re.findall(pattern, html, re.IGNORECASE)
+            for match in matches:
+                try:
+                    price = float(match)
+                    if 0.01 <= price <= 9999:
+                        data['price'] = round(price, 2)
+                        break
+                except ValueError:
+                    continue
+            if 'price' in data:
+                break
+
+        # Extract description/specifications for industrial parts
+        desc_patterns = [
+            r'"description"\s*:\s*"([^"]+)"',
+            r'<meta name="description" content="([^"]+)"',
+            r'class="[^"]*description[^"]*"[^>]*>([^<]+)<',
+        ]
+        for pattern in desc_patterns:
+            match = re.search(pattern, html, re.IGNORECASE)
+            if match:
+                desc = match.group(1).strip()
+                if len(desc) > 10:
+                    # Use description as title if no title found
+                    if not data.get('title'):
+                        data['title'] = desc[:200]
+                    break
+
+    except Exception as e:
+        logger.warning(f"Kimball scrape failed for {url_or_part_number}: {e}")
+
+    return data if data else None
+
+
+@items_bp.route('/lookup-part', methods=['POST'])
+def lookup_part():
+    """Look up an item by part number (barcode scan support).
+
+    Accepts JSON: { "part_number": "KM11234" } or { "barcode": "11234" }
+
+    Returns existing item if found, or scrapes Kimball catalog for new items.
+    """
+    data = request.get_json() or {}
+    part_number = data.get('part_number') or data.get('barcode') or data.get('query')
+
+    if not part_number:
+        return jsonify({'error': 'part_number, barcode, or query is required'}), 400
+
+    # Normalize part number
+    part_number = extract_kimball_part_number(part_number) or str(part_number).strip().upper()
+
+    # First, check if we already have this item
+    existing = Item.get_by_part_number(part_number)
+    if existing:
+        return jsonify({
+            'success': True,
+            'status': 'found',
+            'item': existing,
+            'message': 'Item found in your inventory'
+        })
+
+    # Also check by product_id for Kimball items
+    existing = Item.get_by_product('kimball', part_number)
+    if existing:
+        return jsonify({
+            'success': True,
+            'status': 'found',
+            'item': existing,
+            'message': 'Item found in your inventory'
+        })
+
+    # Not found locally - try to scrape from Kimball catalog
+    try:
+        scraped = scrape_kimball_product(part_number)
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'status': 'not_found',
+            'part_number': part_number,
+            'message': f'Part not found in inventory. Catalog lookup failed: {str(e)}'
+        })
+
+    if scraped:
+        return jsonify({
+            'success': True,
+            'status': 'catalog',
+            'part_number': part_number,
+            'scraped_data': scraped,
+            'message': 'Part not in inventory but found in Kimball catalog. Add it?'
+        })
+
+    return jsonify({
+        'success': False,
+        'status': 'not_found',
+        'part_number': part_number,
+        'message': 'Part not found in inventory or Kimball catalog'
+    })
+
+
+@items_bp.route('/search-parts', methods=['GET'])
+def search_parts():
+    """Search for items by part number (partial match).
+
+    Query param: ?q=KM112
+    """
+    query = request.args.get('q', '').strip()
+
+    if not query:
+        return jsonify({'error': 'Query parameter q is required'}), 400
+
+    items = Item.search_by_part_number(query)
+
+    return jsonify({
+        'success': True,
+        'query': query,
+        'count': len(items),
+        'items': items
+    })
+
+
+@items_bp.route('/import-part', methods=['POST'])
+def import_part():
+    """Import a Kimball Midwest part by part number.
+
+    Accepts JSON: { "part_number": "KM11234", "list_id": 1 }
+
+    Scrapes the Kimball catalog and adds the item to inventory.
+    """
+    data = request.get_json() or {}
+    part_number = data.get('part_number') or data.get('barcode')
+    list_id = data.get('list_id', 1)
+
+    if not part_number:
+        return jsonify({'error': 'part_number is required'}), 400
+
+    # Normalize
+    part_number = extract_kimball_part_number(part_number) or str(part_number).strip().upper()
+
+    # Validate list_id
+    from models.list import List
+    if List.get_by_id(list_id) is None:
+        list_id = 1
+
+    # Check if already exists
+    existing = Item.get_by_part_number(part_number)
+    if not existing:
+        existing = Item.get_by_product('kimball', part_number)
+
+    if existing:
+        return jsonify({
+            'success': True,
+            'status': 'exists',
+            'message': 'This part is already in your inventory!',
+            'item': existing
+        })
+
+    # Scrape from catalog
+    try:
+        scraped = scrape_kimball_product(part_number)
+    except Exception as e:
+        scraped = None
+
+    if not scraped:
+        scraped = {}
+
+    # Create item with part number
+    item = Item.create(
+        store='kimball',
+        product_id=scraped.get('product_id', part_number),
+        product_url=f'https://catalog.kimballmidwest.com/search?q={part_number}',
+        title=scraped.get('title', f'Kimball Part {part_number}'),
+        image_url=scraped.get('image_url'),
+        current_price=scraped.get('price'),
+        quantity=1,
+        list_id=list_id,
+        part_number=part_number
+    )
+
+    return jsonify({
+        'success': True,
+        'status': 'imported',
+        'message': 'Part added to your inventory!',
+        'item': item
     })

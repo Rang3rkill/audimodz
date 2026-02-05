@@ -5,6 +5,8 @@ const API_BASE = 'http://localhost:5000';
 const SUPPORTED_STORES = {
   'temu.com': { name: 'Temu', key: 'temu' },
   'amazon.com': { name: 'Amazon', key: 'amazon' },
+  'kimballmidwest.com': { name: 'Kimball Midwest', key: 'kimball' },
+  'catalog.kimballmidwest.com': { name: 'Kimball Midwest', key: 'kimball' },
 };
 
 // DOM elements

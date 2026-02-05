@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Judi's Wishlist Importer",
-  "version": "1.1.0",
-  "description": "Import items from Temu and Amazon carts to Judi's Wishlist",
+  "version": "1.2.0",
+  "description": "Import items from Temu, Amazon, and Kimball Midwest to Judi's Wishlist",
   "permissions": [
     "activeTab",
     "scripting",
@@ -13,7 +13,9 @@
     "http://localhost:5000/*",
     "http://127.0.0.1:5000/*",
     "*://*.temu.com/*",
-    "*://*.amazon.com/*"
+    "*://*.amazon.com/*",
+    "*://*.kimballmidwest.com/*",
+    "*://catalog.kimballmidwest.com/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
@@ -51,6 +53,11 @@
     {
       "matches": ["*://*.amazon.com/*"],
       "js": ["content/amazon.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.kimballmidwest.com/*", "*://catalog.kimballmidwest.com/*"],
+      "js": ["content/kimball.js"],
       "run_at": "document_idle"
     }
   ]

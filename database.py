@@ -134,6 +134,12 @@ def init_db():
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+        # Add part_number for industrial parts (Kimball Midwest, etc.) - supports barcode lookup
+        try:
+            cursor.execute('ALTER TABLE items ADD COLUMN part_number TEXT')
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         # Create indexes
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_items_category ON items(category_id)
